@@ -404,7 +404,8 @@ public class BActivityThread extends IBActivityThread.Stub {
             boolean ggEnabled = top.niunaijun.blackbox.core.env.BEnvironment.isGGCompatEnabled();
             boolean antiCheatEnabled = top.niunaijun.blackbox.core.env.BEnvironment.isAntiCheatBypassEnabled();
             boolean isExcludedGG = top.niunaijun.blackbox.core.env.BEnvironment.isPackageExcludedFromAntiCheat(packageName);
-            NativeCore.setGGMode(ggEnabled);
+            // Excluded apps (like GG itself) should NOT be dumpable so game anti-cheat cannot inspect /proc/<gg_pid>/maps
+            NativeCore.setGGMode(ggEnabled && !isExcludedGG);
             NativeCore.setAntiCheatBypass(antiCheatEnabled && !isExcludedGG, packageName != null ? packageName : "", isExcludedGG);
         } catch (Throwable t) {
             Slog.w(TAG, "Error configuring GG / anti-cheat mode: " + t.getMessage());
