@@ -57,7 +57,7 @@ public class MethodParameterUtils {
         for (int i = 0; i < args.length; i++) {
             if (args[i] instanceof Integer) {
                 int uid = (int) args[i];
-                if (uid == BlackBoxCore.getBUid()) {
+                if (uid == BlackBoxCore.getBUid() || uid == BActivityThread.getBAppId()) {
                     args[i] = BlackBoxCore.getHostUid();
                 }
             }
@@ -68,7 +68,7 @@ public class MethodParameterUtils {
         int index = ArrayUtils.indexOfLast(args, Integer.class);
         if (index != -1) {
             int uid = (int) args[index];
-            if (uid == BlackBoxCore.getBUid()) {
+            if (uid == BlackBoxCore.getBUid() || uid == BActivityThread.getBAppId()) {
                 args[index] = BlackBoxCore.getHostUid();
             }
         }

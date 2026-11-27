@@ -55,31 +55,6 @@ const char *IO::redirectPath(const char *__path) {
         return __path;
     }
 
-    if (strstr(__path, "resource-cache")) {
-        ALOGD("Blocking resource-cache path: %s", __path);
-        return "/dev/null";
-    }
-    if (strstr(__path, "@idmap")) {
-        ALOGD("Blocking idmap path: %s", __path);
-        return "/dev/null";
-    }
-    if (strstr(__path, "systemui") && (strstr(__path, ".frro") || strstr(__path, "-accent-") || strstr(__path, "-dynamic-") || strstr(__path, "-neutral-"))) {
-        ALOGD("Blocking systemui problematic path: %s", __path);
-        return "/dev/null";
-    }
-    if (strstr(__path, "data@resource-cache@")) {
-        ALOGD("Blocking data@resource-cache@ pattern: %s", __path);
-        return "/dev/null";
-    }
-    if (strstr(__path, ".frro")) {
-        ALOGD("Blocking .frro file: %s", __path);
-        return "/dev/null";
-    }
-    if (strstr(__path, "systemui")) {
-        ALOGD("Blocking systemui path: %s", __path);
-        return "/dev/null";
-    }
-
     static thread_local char s_tls_buffers[8][4096];
     static thread_local int s_tls_idx = 0;
 

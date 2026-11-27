@@ -795,8 +795,13 @@ public class IActivityManagerProxy extends ClassInvocationStub {
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             MethodParameterUtils.replaceLastUid(args);
             String permission = (String) args[0];
-            if (permission.equals(Manifest.permission.ACCOUNT_MANAGER)
-                    || permission.equals(Manifest.permission.SEND_SMS)) {
+            if (permission != null && (permission.equals(Manifest.permission.INTERNET)
+                    || permission.equals(Manifest.permission.ACCESS_NETWORK_STATE)
+                    || permission.equals(Manifest.permission.ACCESS_WIFI_STATE)
+                    || permission.equals(Manifest.permission.CHANGE_NETWORK_STATE)
+                    || permission.equals(Manifest.permission.CHANGE_WIFI_STATE)
+                    || permission.equals(Manifest.permission.ACCOUNT_MANAGER)
+                    || permission.equals(Manifest.permission.SEND_SMS))) {
                 return PackageManager.PERMISSION_GRANTED;
             }
             
@@ -814,6 +819,10 @@ public class IActivityManagerProxy extends ClassInvocationStub {
             
             return method.invoke(who, args);
         }
+    }
+
+    @ProxyMethod("checkPermissionWithToken")
+    public static class checkPermissionWithToken extends checkPermission {
     }
 
     

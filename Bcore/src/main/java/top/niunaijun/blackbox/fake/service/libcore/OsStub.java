@@ -86,13 +86,8 @@ public class OsStub extends ClassInvocationStub {
     }
 
     private static int getFakeUid(int callUid) {
-        if (callUid > 0 && callUid <= Process.FIRST_APPLICATION_UID)
+        if (callUid > 0)
             return callUid;
-
-        if (BActivityThread.isThreadInit() && BActivityThread.currentActivityThread().isInit()) {
-            return BActivityThread.getBAppId();
-        } else {
-            return BlackBoxCore.getHostUid();
-        }
+        return BlackBoxCore.getHostUid();
     }
 }
