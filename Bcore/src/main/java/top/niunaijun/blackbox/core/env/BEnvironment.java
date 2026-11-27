@@ -254,27 +254,6 @@ public class BEnvironment {
         if (packageName == null || packageName.isEmpty()) {
             return false;
         }
-        if (getAntiCheatExcludedPackages().contains(packageName)) {
-            return true;
-        }
-        // Fallback auto-detection for GameGuardian randomized packages (lib5.so / lib9.so / libpl.so)
-        try {
-            File appLibDir = getAppLibDir(packageName);
-            if (appLibDir.exists()) {
-                File[] archDirs = appLibDir.listFiles();
-                if (archDirs != null) {
-                    for (File dir : archDirs) {
-                        if (new File(dir, "lib5.so").exists() || new File(dir, "lib9.so").exists() || new File(dir, "libpl.so").exists()) {
-                            return true;
-                        }
-                    }
-                }
-                if (new File(appLibDir, "lib5.so").exists() || new File(appLibDir, "lib9.so").exists() || new File(appLibDir, "libpl.so").exists()) {
-                    return true;
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        return false;
+        return getAntiCheatExcludedPackages().contains(packageName);
     }
 }
