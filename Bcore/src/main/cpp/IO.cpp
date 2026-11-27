@@ -44,9 +44,9 @@ char *replace(const char *str, const char *src, const char *dst) {
     return result;
 }
 
-const char *IO::redirectPathBuf(const char *__path, char *buf, size_t buf_size) {
-    if (__path == nullptr || buf == nullptr || buf_size == 0) {
-        return __path;
+const char *IO::redirectPath(const char *__path) {
+    if (__path == nullptr) {
+        return nullptr;
     }
     if (strncmp(__path, "/proc/", 6) == 0) {
         return __path;
@@ -54,6 +54,9 @@ const char *IO::redirectPathBuf(const char *__path, char *buf, size_t buf_size) 
     if (strstr(__path, "/blackbox/") != nullptr) {
         return __path;
     }
+
+    static thread_local char s_tls_buffers[8][4096];
+    static thread_local int s_tls_idx = 0;
 
     list<IO::RelocateInfo>::iterator iterator;
     for (iterator = relocate_rule.begin(); iterator != relocate_rule.end(); ++iterator) {
@@ -66,21 +69,16 @@ const char *IO::redirectPathBuf(const char *__path, char *buf, size_t buf_size) 
             (__path[target_len] == '\0' || __path[target_len] == '/')) {
             size_t reloc_len = strlen(info.relocatePath);
             size_t rest_len = strlen(__path + target_len);
-            if (reloc_len + rest_len < buf_size - 1) {
-                memcpy(buf, info.relocatePath, reloc_len);
-                memcpy(buf + reloc_len, __path + target_len, rest_len + 1);
-                return buf;
+            if (reloc_len + rest_len < sizeof(s_tls_buffers[0]) - 1) {
+                char *ret = s_tls_buffers[s_tls_idx];
+                s_tls_idx = (s_tls_idx + 1) & 7;
+                memcpy(ret, info.relocatePath, reloc_len);
+                memcpy(ret + reloc_len, __path + target_len, rest_len + 1);
+                return ret;
             }
         }
     }
     return __path;
-}
-
-const char *IO::redirectPath(const char *__path) {
-    static char s_ring_buffers[16][2048];
-    static volatile int s_ring_idx = 0;
-    int idx = (__sync_fetch_and_add(&s_ring_idx, 1)) & 15;
-    return redirectPathBuf(__path, s_ring_buffers[idx], sizeof(s_ring_buffers[idx]));
 }
 
 jstring IO::redirectPath(JNIEnv *env, jstring path) {

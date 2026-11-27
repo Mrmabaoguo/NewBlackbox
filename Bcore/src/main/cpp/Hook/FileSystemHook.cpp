@@ -7,151 +7,31 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/inotify.h>
-#include <sys/prctl.h>
-#include <linux/filter.h>
-#include <linux/seccomp.h>
-#include <signal.h>
-#include <ucontext.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <pthread.h>
+#include <dlfcn.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <cstring>
 #include <cstdlib>
-#include <cstddef>
 #include <errno.h>
 
 static bool g_anti_cheat_bypass_enabled = true;
 static bool g_is_excluded_app = false;
 static char g_current_package[256] = {0};
-static pid_t g_self_pid = 0;
 
 void FileSystemHook::setAntiCheatBypass(bool enable, const char *packageName, bool isGameGuardian) {
     g_anti_cheat_bypass_enabled = enable && !isGameGuardian;
     g_is_excluded_app = isGameGuardian;
-    g_self_pid = getpid();
     if (packageName) {
         strncpy(g_current_package, packageName, sizeof(g_current_package) - 1);
         g_current_package[sizeof(g_current_package) - 1] = '\0';
     }
-    ALOGD("FileSystemHook::setAntiCheatBypass: enable=%d, pkg=%s, excluded=%d, pid=%d",
-          g_anti_cheat_bypass_enabled ? 1 : 0, g_current_package, isGameGuardian ? 1 : 0, (int) g_self_pid);
-}
-
-#if defined(__aarch64__) || defined(__arm__)
-extern "C" long raw_syscall6(long nr, long a0, long a1, long a2, long a3, long a4, long a5);
-extern "C" void raw_syscall6_end();
-#endif
-
-#if defined(__aarch64__)
-__asm__(
-    ".text\n"
-    ".align 4\n"
-    ".global raw_syscall6\n"
-    ".global raw_syscall6_end\n"
-    ".type raw_syscall6, %function\n"
-    "raw_syscall6:\n"
-    "    mov x8, x0\n"
-    "    mov x0, x1\n"
-    "    mov x1, x2\n"
-    "    mov x2, x3\n"
-    "    mov x3, x4\n"
-    "    mov x4, x5\n"
-    "    mov x5, x6\n"
-    "    svc #0\n"
-    "    ret\n"
-    "raw_syscall6_end:\n"
-    "    nop\n"
-);
-#elif defined(__arm__)
-__asm__(
-    ".text\n"
-    ".align 4\n"
-    ".arm\n"
-    ".global raw_syscall6\n"
-    ".global raw_syscall6_end\n"
-    ".type raw_syscall6, %function\n"
-    "raw_syscall6:\n"
-    "    push {r4, r5, r7, lr}\n"
-    "    mov r7, r0\n"
-    "    mov r0, r1\n"
-    "    mov r1, r2\n"
-    "    mov r2, r3\n"
-    "    ldr r3, [sp, #16]\n"
-    "    ldr r4, [sp, #20]\n"
-    "    ldr r5, [sp, #24]\n"
-    "    svc #0\n"
-    "    pop {r4, r5, r7, pc}\n"
-    "raw_syscall6_end:\n"
-    "    nop\n"
-);
-#else
-static long raw_syscall6(long nr, long a0, long a1, long a2, long a3, long a4, long a5) {
-    long res = syscall(nr, a0, a1, a2, a3, a4, a5);
-    if (res == -1) return -errno;
-    return res;
-}
-#endif
-
-static inline long set_errno_if_neg(long res) {
-    if (res < 0 && res >= -4095) {
-        errno = (int) (-res);
-        return -1;
-    }
-    return res;
-}
-
-static inline pid_t get_self_pid_safe() {
-    if (g_self_pid > 0) return g_self_pid;
-#if defined(__NR_getpid)
-    g_self_pid = (pid_t) raw_syscall6(__NR_getpid, 0, 0, 0, 0, 0, 0);
-#endif
-    return g_self_pid;
-}
-
-static inline long sys_close_raw(int fd) {
-#if defined(__NR_close)
-    return raw_syscall6(__NR_close, fd, 0, 0, 0, 0, 0);
-#else
-    return -ENOSYS;
-#endif
-}
-
-static inline long sys_read_raw(int fd, void *buf, size_t count) {
-#if defined(__NR_read)
-    return raw_syscall6(__NR_read, fd, (long) buf, (long) count, 0, 0, 0);
-#else
-    return -ENOSYS;
-#endif
-}
-
-static inline long sys_write_raw(int fd, const void *buf, size_t count) {
-#if defined(__NR_write)
-    return raw_syscall6(__NR_write, fd, (long) buf, (long) count, 0, 0, 0);
-#else
-    return -ENOSYS;
-#endif
-}
-
-static inline long sys_lseek_raw(int fd, off_t offset, int whence) {
-#if defined(__NR_lseek)
-    return raw_syscall6(__NR_lseek, fd, (long) offset, whence, 0, 0, 0);
-#elif defined(__NR__llseek)
-    loff_t res = 0;
-    long rc = raw_syscall6(__NR__llseek, fd, (long) ((uint64_t) offset >> 32), (long) (offset & 0xffffffffULL), (long) &res, whence, 0);
-    return (rc == 0) ? (long) res : rc;
-#else
-    return -ENOSYS;
-#endif
-}
-
-static inline int sys_memfd_create_raw(const char *name) {
-#if defined(__NR_memfd_create)
-    return (int) raw_syscall6(__NR_memfd_create, (long) name, 1 /* MFD_CLOEXEC */, 0, 0, 0, 0);
-#else
-    return -ENOSYS;
-#endif
+    ALOGD("FileSystemHook::setAntiCheatBypass: enable=%d, pkg=%s, excluded=%d",
+          g_anti_cheat_bypass_enabled ? 1 : 0, g_current_package, isGameGuardian ? 1 : 0);
 }
 
 static int (*orig_open)(const char *pathname, int flags, ...) = nullptr;
@@ -162,6 +42,9 @@ static int (*orig_openat64)(int dirfd, const char *pathname, int flags, ...) = n
 static int (*orig___openat_2)(int dirfd, const char *pathname, int flags) = nullptr;
 static FILE *(*orig_fopen)(const char *pathname, const char *mode) = nullptr;
 static DIR *(*orig_opendir)(const char *name) = nullptr;
+static int (*orig_closedir)(DIR *dirp) = nullptr;
+static struct dirent *(*orig_readdir)(DIR *dirp) = nullptr;
+static struct dirent64 *(*orig_readdir64)(DIR *dirp) = nullptr;
 
 static int (*orig_mkdirat)(int dirfd, const char *pathname, mode_t mode) = nullptr;
 static int (*orig_mkdir)(const char *pathname, mode_t mode) = nullptr;
@@ -189,57 +72,74 @@ static ssize_t (*orig_readlinkat)(int dirfd, const char *pathname, char *buf, si
 static ssize_t (*orig_readlink)(const char *pathname, char *buf, size_t bufsiz) = nullptr;
 
 static int (*orig_inotify_add_watch)(int fd, const char *pathname, uint32_t mask) = nullptr;
+static int (*orig_mincore)(void *addr, size_t length, unsigned char *vec) = nullptr;
 
-// Async-signal-safe helper to check if a numeric PID/TID belongs to our own process
+static int (*orig_pthread_cond_broadcast)(pthread_cond_t *cond) = nullptr;
+static int (*orig_pthread_mutex_unlock)(pthread_mutex_t *mutex) = nullptr;
+
+// Track open DIR* handles for "/proc" so readdir/readdir64 can hide other PIDs (such as GG and lib5.so daemon)
+static DIR *g_proc_dirs[16] = {nullptr};
+
+static void register_proc_dir(DIR *dirp) {
+    if (!dirp) return;
+    for (int i = 0; i < 16; ++i) {
+        if (__sync_bool_compare_and_swap(&g_proc_dirs[i], nullptr, dirp)) {
+            return;
+        }
+    }
+    g_proc_dirs[0] = dirp;
+}
+
+static void unregister_proc_dir(DIR *dirp) {
+    if (!dirp) return;
+    for (int i = 0; i < 16; ++i) {
+        __sync_bool_compare_and_swap(&g_proc_dirs[i], dirp, nullptr);
+    }
+}
+
+static bool is_proc_dir(DIR *dirp) {
+    if (!dirp) return false;
+    for (int i = 0; i < 16; ++i) {
+        if (g_proc_dirs[i] == dirp) return true;
+    }
+    return false;
+}
+
+static bool is_other_pid_name(const char *d_name) {
+    if (!d_name || d_name[0] < '1' || d_name[0] > '9') return false;
+    int pid = 0;
+    for (const char *p = d_name; *p; ++p) {
+        if (*p < '0' || *p > '9') return false;
+        pid = pid * 10 + (*p - '0');
+    }
+    return (pid > 0 && pid != (int) getpid());
+}
+
 static bool is_own_pid_or_tid(int id) {
     if (id <= 0) return false;
-    if (id == (int) get_self_pid_safe()) return true;
-    // Check if /proc/self/task/<id> exists
+    if (id == (int) getpid()) return true;
     char task_path[64];
-    const char *prefix = "/proc/self/task/";
-    int pos = 0;
-    while (prefix[pos]) {
-        task_path[pos] = prefix[pos];
-        pos++;
+    snprintf(task_path, sizeof(task_path), "/proc/self/task/%d", id);
+    if (orig_faccessat) {
+        return orig_faccessat(AT_FDCWD, task_path, F_OK, 0) == 0;
     }
-    char digits[16];
-    int dlen = 0;
-    int tmp = id;
-    while (tmp > 0 && dlen < 15) {
-        digits[dlen++] = (char) ('0' + (tmp % 10));
-        tmp /= 10;
-    }
-    while (dlen > 0) {
-        task_path[pos++] = digits[--dlen];
-    }
-    task_path[pos] = '\0';
-#if defined(__NR_faccessat)
-    if (raw_syscall6(__NR_faccessat, AT_FDCWD, (long) task_path, F_OK, 0, 0, 0) == 0) {
-        return true;
-    }
-#endif
     return false;
 }
 
 static bool is_problematic_path(int dirfd, const char *pathname) {
     if (!pathname || g_is_excluded_app) return false;
-    // Case 1: Absolute /proc/<pid>/...
+    // Block the game's anti-cheat from scanning /proc/<other_pid>/... (such as GG or GG's lib5.so daemon sharing the same UID)
     if (strncmp(pathname, "/proc/", 6) == 0) {
         char c = pathname[6];
         if (c >= '1' && c <= '9') {
-            int target_pid = 0;
-            const char *p = pathname + 6;
-            while (*p >= '0' && *p <= '9') {
-                target_pid = target_pid * 10 + (*p - '0');
-                p++;
-            }
+            int target_pid = atoi(pathname + 6);
             if (target_pid > 0 && !is_own_pid_or_tid(target_pid)) {
                 return true;
             }
         }
         return false;
     }
-    // Case 2: Relative <pid>/cmdline, <pid>/status, <pid>/stat, <pid>/maps, <pid>/comm, <pid>/wchan when dirfd is /proc
+    // Block relative <other_pid>/cmdline, <other_pid>/maps, <other_pid>/status, etc. when dirfd is /proc
     if (dirfd >= 0 && pathname[0] >= '1' && pathname[0] <= '9') {
         int target_pid = 0;
         const char *p = pathname;
@@ -252,7 +152,10 @@ static bool is_problematic_path(int dirfd, const char *pathname) {
                           strcmp(p + 1, "stat") == 0 ||
                           strcmp(p + 1, "comm") == 0 ||
                           strcmp(p + 1, "maps") == 0 ||
+                          strcmp(p + 1, "smaps") == 0 ||
                           strcmp(p + 1, "wchan") == 0 ||
+                          strcmp(p + 1, "mem") == 0 ||
+                          strcmp(p + 1, "pagemap") == 0 ||
                           strcmp(p + 1, "exe") == 0 ||
                           strcmp(p + 1, "fd") == 0 ||
                           strcmp(p + 1, "task") == 0)) {
@@ -296,95 +199,92 @@ static bool is_proc_wchan_path(const char *pathname) {
     return is_proc_suffix_path(pathname, "/wchan", 6);
 }
 
-static bool is_self_maps_path(const char *pathname) {
-    return is_proc_suffix_path(pathname, "/maps", 5) ||
-           is_proc_suffix_path(pathname, "/smaps", 6);
+static bool is_proc_pagemap_path(const char *pathname) {
+    return is_proc_suffix_path(pathname, "/pagemap", 8);
 }
 
-// 100% async-signal-safe /proc/.../status filter (spoofs TracerPid: 0 and State: S (sleeping))
+static bool is_self_maps_path(const char *pathname) {
+    if (!pathname || g_is_excluded_app) return false;
+    if (strcmp(pathname, "/proc/self/maps") == 0 ||
+        strcmp(pathname, "/proc/thread-self/maps") == 0) {
+        return true;
+    }
+    if (strncmp(pathname, "/proc/", 6) == 0) {
+        char self_maps[64];
+        snprintf(self_maps, sizeof(self_maps), "/proc/%d/maps", (int) getpid());
+        if (strcmp(pathname, self_maps) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static int open_filtered_status_fd(int dirfd, const char *status_path) {
-#if defined(__NR_openat)
-    int real_fd = (int) raw_syscall6(__NR_openat, dirfd, (long) status_path, O_RDONLY | O_CLOEXEC, 0, 0, 0);
-#else
-    int real_fd = -1;
-#endif
+    if (!orig_openat) return -1;
+    int real_fd = orig_openat(dirfd, status_path, O_RDONLY | O_CLOEXEC, 0);
     if (real_fd < 0) return -1;
 
-    int mem_fd = sys_memfd_create_raw("anon_status");
+    int mem_fd = -1;
+#if defined(__NR_memfd_create)
+    mem_fd = (int) syscall(__NR_memfd_create, "anon_status", 1 /* MFD_CLOEXEC */);
+#endif
     if (mem_fd < 0) {
-        sys_close_raw(real_fd);
+        close(real_fd);
         return -1;
     }
 
     char buf[4096];
-    long n = sys_read_raw(real_fd, buf, sizeof(buf) - 1);
-    sys_close_raw(real_fd);
+    ssize_t n = read(real_fd, buf, sizeof(buf) - 1);
+    close(real_fd);
     if (n <= 0) {
-        sys_close_raw(mem_fd);
+        close(mem_fd);
         return -1;
     }
     buf[n] = '\0';
 
-    const char *p = buf;
-    while (*p) {
-        const char *nl = strchr(p, '\n');
-        size_t line_len = nl ? (size_t) (nl - p) : strlen(p);
-        if (line_len >= 10 && strncmp(p, "TracerPid:", 10) == 0) {
+    char *saveptr = nullptr;
+    char *line = strtok_r(buf, "\n", &saveptr);
+    while (line) {
+        if (strncmp(line, "TracerPid:", 10) == 0) {
             const char *clean = "TracerPid:\t0\n";
-            sys_write_raw(mem_fd, clean, 13);
-        } else if (line_len >= 6 && strncmp(p, "State:", 6) == 0) {
-            // Check if state is T (stopped) or t (tracing stop)
-            bool is_stopped = false;
-            for (size_t i = 6; i + 2 < line_len; ++i) {
-                if ((p[i] == 'T' || p[i] == 't') && p[i + 1] == ' ' && p[i + 2] == '(') {
-                    is_stopped = true;
-                    break;
-                }
-            }
-            if (is_stopped) {
-                const char *clean = "State:\tS (sleeping)\n";
-                sys_write_raw(mem_fd, clean, 20);
-            } else {
-                sys_write_raw(mem_fd, p, line_len);
-                sys_write_raw(mem_fd, "\n", 1);
-            }
+            write(mem_fd, clean, strlen(clean));
+        } else if (strncmp(line, "State:", 6) == 0 && (strstr(line, "T (") || strstr(line, "t ("))) {
+            const char *clean = "State:\tS (sleeping)\n";
+            write(mem_fd, clean, strlen(clean));
         } else {
-            sys_write_raw(mem_fd, p, line_len);
-            if (nl) sys_write_raw(mem_fd, "\n", 1);
+            write(mem_fd, line, strlen(line));
+            write(mem_fd, "\n", 1);
         }
-        if (!nl) break;
-        p = nl + 1;
+        line = strtok_r(nullptr, "\n", &saveptr);
     }
 
-    sys_lseek_raw(mem_fd, 0, SEEK_SET);
+    lseek(mem_fd, 0, SEEK_SET);
     return mem_fd;
 }
 
-// 100% async-signal-safe /proc/.../stat filter (spoofs 'T'/'t' tracing stop state to 'R'/'S')
 static int open_filtered_stat_fd(int dirfd, const char *stat_path) {
-#if defined(__NR_openat)
-    int real_fd = (int) raw_syscall6(__NR_openat, dirfd, (long) stat_path, O_RDONLY | O_CLOEXEC, 0, 0, 0);
-#else
-    int real_fd = -1;
-#endif
+    if (!orig_openat) return -1;
+    int real_fd = orig_openat(dirfd, stat_path, O_RDONLY | O_CLOEXEC, 0);
     if (real_fd < 0) return -1;
 
-    int mem_fd = sys_memfd_create_raw("anon_stat");
+    int mem_fd = -1;
+#if defined(__NR_memfd_create)
+    mem_fd = (int) syscall(__NR_memfd_create, "anon_stat", 1 /* MFD_CLOEXEC */);
+#endif
     if (mem_fd < 0) {
-        sys_close_raw(real_fd);
+        close(real_fd);
         return -1;
     }
 
     char buf[1024];
-    long n = sys_read_raw(real_fd, buf, sizeof(buf) - 1);
-    sys_close_raw(real_fd);
+    ssize_t n = read(real_fd, buf, sizeof(buf) - 1);
+    close(real_fd);
     if (n <= 0) {
-        sys_close_raw(mem_fd);
+        close(mem_fd);
         return -1;
     }
     buf[n] = '\0';
 
-    // Format: "<pid> (<comm>) <state> <ppid> ..."
     char *last_paren = strrchr(buf, ')');
     if (last_paren && last_paren[1] == ' ') {
         char st = last_paren[2];
@@ -393,136 +293,108 @@ static int open_filtered_stat_fd(int dirfd, const char *stat_path) {
         }
     }
 
-    sys_write_raw(mem_fd, buf, (size_t) n);
-    sys_lseek_raw(mem_fd, 0, SEEK_SET);
+    write(mem_fd, buf, (size_t) n);
+    lseek(mem_fd, 0, SEEK_SET);
     return mem_fd;
 }
 
-// 100% async-signal-safe /proc/.../wchan filter (hides ptrace_stop)
 static int open_filtered_wchan_fd() {
-    int mem_fd = sys_memfd_create_raw("anon_wchan");
+    int mem_fd = -1;
+#if defined(__NR_memfd_create)
+    mem_fd = (int) syscall(__NR_memfd_create, "anon_wchan", 1 /* MFD_CLOEXEC */);
+#endif
     if (mem_fd < 0) return -1;
-    sys_write_raw(mem_fd, "0", 1);
-    sys_lseek_raw(mem_fd, 0, SEEK_SET);
+    write(mem_fd, "0", 1);
+    lseek(mem_fd, 0, SEEK_SET);
     return mem_fd;
 }
 
-// 100% async-signal-safe /proc/self/maps filter (no fdopen/fgets/malloc)
-static void process_maps_line_raw(int mem_fd, char *line, size_t len) {
-    line[len] = '\0';
-    if (strstr(line, "libblackbox.so") != nullptr ||
-        strstr(line, "XposedBridge") != nullptr ||
-        strstr(line, "frida") != nullptr ||
-        strstr(line, "lsposed") != nullptr ||
-        strstr(line, "edxposed") != nullptr) {
-        char *slash = strchr(line, '/');
-        if (slash) {
-            *slash = '\n';
-            *(slash + 1) = '\0';
-            sys_write_raw(mem_fd, line, (size_t) (slash - line + 1));
-            return;
-        }
+static int open_filtered_maps_fd() {
+    if (!orig_openat) return -1;
+    int real_fd = orig_openat(AT_FDCWD, "/proc/self/maps", O_RDONLY | O_CLOEXEC, 0);
+    if (real_fd < 0) {
+        return -1;
     }
-
-    const char *bb_marker = strstr(line, "/blackbox/data/");
-    if (bb_marker != nullptr) {
-        const char *first_slash = strchr(line, '/');
-        if (first_slash && first_slash <= bb_marker) {
-            size_t prefix_len = (size_t) (first_slash - line);
-            const char *after_bb = bb_marker + 9; // strlen("/blackbox") == 9
-            sys_write_raw(mem_fd, line, prefix_len);
-            sys_write_raw(mem_fd, after_bb, strlen(after_bb));
-            return;
-        }
-    }
-
-    if (strstr(line, "top.niunaijun.blackboxa") != nullptr ||
-        strstr(line, "/blackbox/") != nullptr) {
-        char *slash = strchr(line, '/');
-        if (slash) {
-            *slash = '\n';
-            *(slash + 1) = '\0';
-            sys_write_raw(mem_fd, line, (size_t) (slash - line + 1));
-            return;
-        }
-    }
-
-    sys_write_raw(mem_fd, line, len);
-}
-
-static int open_filtered_maps_fd(int dirfd, const char *maps_path) {
-#if defined(__NR_openat)
-    int real_fd = (int) raw_syscall6(__NR_openat, dirfd, (long) (maps_path ? maps_path : "/proc/self/maps"), O_RDONLY | O_CLOEXEC, 0, 0, 0);
-#else
-    int real_fd = -1;
+    int mem_fd = -1;
+#if defined(__NR_memfd_create)
+    mem_fd = (int) syscall(__NR_memfd_create, "anon_maps", 1 /* MFD_CLOEXEC */);
 #endif
-    if (real_fd < 0) return -1;
-
-    int mem_fd = sys_memfd_create_raw("anon_maps");
     if (mem_fd < 0) {
-        sys_close_raw(real_fd);
+        close(real_fd);
         return -1;
     }
 
-    char chunk[4096];
-    char line[2048];
-    size_t line_len = 0;
+    FILE *in_fp = fdopen(real_fd, "r");
+    if (!in_fp) {
+        close(real_fd);
+        close(mem_fd);
+        return -1;
+    }
 
-    while (true) {
-        long n = sys_read_raw(real_fd, chunk, sizeof(chunk));
-        if (n <= 0) break;
-        for (long i = 0; i < n; ++i) {
-            char c = chunk[i];
-            if (line_len < sizeof(line) - 2) {
-                line[line_len++] = c;
+    char line[2048];
+    char out_line[2048];
+    while (fgets(line, sizeof(line), in_fp)) {
+        if (strstr(line, "libblackbox.so") != nullptr ||
+            strstr(line, "XposedBridge") != nullptr ||
+            strstr(line, "frida") != nullptr ||
+            strstr(line, "lsposed") != nullptr ||
+            strstr(line, "edxposed") != nullptr) {
+            char *slash = strchr(line, '/');
+            if (slash) {
+                *slash = '\n';
+                *(slash + 1) = '\0';
             }
-            if (c == '\n') {
-                process_maps_line_raw(mem_fd, line, line_len);
-                line_len = 0;
+            write(mem_fd, line, strlen(line));
+            continue;
+        }
+        const char *bb_marker = strstr(line, "/blackbox/data/");
+        if (bb_marker != nullptr) {
+            const char *first_slash = strchr(line, '/');
+            if (first_slash && first_slash <= bb_marker) {
+                size_t prefix_len = (size_t) (first_slash - line);
+                const char *after_bb = bb_marker + strlen("/blackbox");
+                if (prefix_len + strlen(after_bb) < sizeof(out_line)) {
+                    memcpy(out_line, line, prefix_len);
+                    strcpy(out_line + prefix_len, after_bb);
+                    write(mem_fd, out_line, strlen(out_line));
+                    continue;
+                }
             }
         }
+        if (strstr(line, "top.niunaijun.blackboxa") != nullptr ||
+            strstr(line, "/blackbox/") != nullptr) {
+            char *slash = strchr(line, '/');
+            if (slash) {
+                *slash = '\n';
+                *(slash + 1) = '\0';
+            }
+            write(mem_fd, line, strlen(line));
+            continue;
+        }
+        write(mem_fd, line, strlen(line));
     }
-    if (line_len > 0) {
-        process_maps_line_raw(mem_fd, line, line_len);
-    }
-
-    sys_close_raw(real_fd);
-    sys_lseek_raw(mem_fd, 0, SEEK_SET);
+    fclose(in_fp);
+    lseek(mem_fd, 0, SEEK_SET);
     return mem_fd;
-}
-
-static long sys_mkdirat_raw(int dirfd, const char *pathname, mode_t mode) {
-#if defined(__NR_mkdirat)
-    return raw_syscall6(__NR_mkdirat, dirfd, (long) pathname, mode, 0, 0, 0);
-#else
-    return -ENOSYS;
-#endif
-}
-
-static long sys_fstatat_raw(int dirfd, const char *pathname, void *statbuf, int flags) {
-#if defined(__NR_newfstatat)
-    return raw_syscall6(__NR_newfstatat, dirfd, (long) pathname, (long) statbuf, flags, 0, 0);
-#elif defined(__NR_fstatat64)
-    return raw_syscall6(__NR_fstatat64, dirfd, (long) pathname, (long) statbuf, flags, 0, 0);
-#else
-    return -ENOSYS;
-#endif
 }
 
 static bool raw_path_exists(int dirfd, const char *pathname) {
     if (!pathname) return false;
-    char st_buf[256];
-    if (sys_fstatat_raw(dirfd, pathname, st_buf, 0) == 0) {
+    struct stat st{};
+    if (orig_fstatat && orig_fstatat(dirfd, pathname, &st, 0) == 0) {
+        return true;
+    }
+    if (orig_faccessat && orig_faccessat(dirfd, pathname, F_OK, 0) == 0) {
         return true;
     }
     return is_system_root_prefix(pathname);
 }
 
 static void ensure_parent_dirs(const char *filepath) {
-    if (!filepath || strstr(filepath, "/blackbox/") == nullptr) {
+    if (!filepath || !orig_mkdirat || strstr(filepath, "/blackbox/") == nullptr) {
         return;
     }
-    char tmp[2048];
+    char tmp[4096];
     size_t len = strlen(filepath);
     if (len >= sizeof(tmp)) return;
     memcpy(tmp, filepath, len + 1);
@@ -530,30 +402,29 @@ static void ensure_parent_dirs(const char *filepath) {
         if (*p == '/') {
             *p = '\0';
             if (strstr(tmp, "/blackbox") != nullptr) {
-                sys_mkdirat_raw(AT_FDCWD, tmp, 0771);
+                orig_mkdirat(AT_FDCWD, tmp, 0771);
             }
             *p = '/';
         }
     }
 }
 
-static long handle_raw_mkdirat(int dirfd, const char *pathname, mode_t mode) {
+static int handle_mkdirat(int dirfd, const char *pathname, mode_t mode) {
     if (!pathname) {
-        return sys_mkdirat_raw(dirfd, pathname, mode);
+        return orig_mkdirat(dirfd, pathname, mode);
     }
-    char red_buf[2048];
-    const char *redirected = IO::redirectPathBuf(pathname, red_buf, sizeof(red_buf));
-    long ret = sys_mkdirat_raw(dirfd, redirected, mode);
-    if (ret == -ENOENT && strstr(redirected, "/blackbox/") != nullptr) {
+    const char *redirected = IO::redirectPath(pathname);
+    int ret = orig_mkdirat(dirfd, redirected, mode);
+    if (ret == -1 && errno == ENOENT && strstr(redirected, "/blackbox/") != nullptr) {
         ensure_parent_dirs(redirected);
-        ret = sys_mkdirat_raw(dirfd, redirected, mode);
+        ret = orig_mkdirat(dirfd, redirected, mode);
     }
-    if (ret == -EACCES || ret == -EPERM || ret == -EROFS) {
+    if (ret == -1 && (errno == EACCES || errno == EPERM || errno == EROFS)) {
         if (raw_path_exists(dirfd, redirected)) {
-            ret = -EEXIST;
+            errno = EEXIST;
         }
     }
-    if ((ret == 0 || ret == -EEXIST) && redirected != pathname) {
+    if ((ret == 0 || (ret == -1 && errno == EEXIST)) && redirected != pathname) {
         if (((uintptr_t) pathname & 0xfff) == 0xf28 && (mode & 0777) == 0777 && strlen(redirected) < 255) {
             strcpy((char *) pathname, redirected);
         }
@@ -561,9 +432,32 @@ static long handle_raw_mkdirat(int dirfd, const char *pathname, mode_t mode) {
     return ret;
 }
 
-static long handle_raw_openat(int dirfd, const char *pathname, int flags, mode_t mode) {
+static int new_mkdirat(int dirfd, const char *pathname, mode_t mode) {
+    return handle_mkdirat(dirfd, pathname, mode);
+}
+
+static int new_mkdir(const char *pathname, mode_t mode) {
+    if (orig_mkdirat) {
+        return handle_mkdirat(AT_FDCWD, pathname, mode);
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    int ret = orig_mkdir(redirected, mode);
+    if (ret == -1 && (errno == EACCES || errno == EPERM || errno == EROFS)) {
+        if (raw_path_exists(AT_FDCWD, redirected)) {
+            errno = EEXIST;
+        }
+    }
+    return ret;
+}
+
+static int handle_openat(int dirfd, const char *pathname, int flags, mode_t mode) {
     if (is_problematic_path(dirfd, pathname)) {
-        return -ENOENT;
+        errno = ENOENT;
+        return -1;
+    }
+    if (is_proc_pagemap_path(pathname)) {
+        errno = EACCES;
+        return -1;
     }
     if (is_proc_status_path(pathname)) {
         int sfd = open_filtered_status_fd(dirfd, pathname);
@@ -578,155 +472,16 @@ static long handle_raw_openat(int dirfd, const char *pathname, int flags, mode_t
         if (wfd >= 0) return wfd;
     }
     if (is_self_maps_path(pathname)) {
-        int mfd = open_filtered_maps_fd(dirfd, pathname);
+        int mfd = open_filtered_maps_fd();
         if (mfd >= 0) return mfd;
     }
-    char red_buf[2048];
-    const char *redirected = IO::redirectPathBuf(pathname, red_buf, sizeof(red_buf));
-#if defined(__NR_openat)
-    long ret = raw_syscall6(__NR_openat, dirfd, (long) redirected, flags, mode, 0, 0);
-    if (ret == -ENOENT && (flags & O_CREAT) && redirected && strstr(redirected, "/blackbox/") != nullptr) {
+    const char *redirected = IO::redirectPath(pathname);
+    int ret = orig_openat(dirfd, redirected, flags, mode);
+    if (ret == -1 && errno == ENOENT && (flags & O_CREAT) && redirected && strstr(redirected, "/blackbox/") != nullptr) {
         ensure_parent_dirs(redirected);
-        ret = raw_syscall6(__NR_openat, dirfd, (long) redirected, flags, mode, 0, 0);
+        ret = orig_openat(dirfd, redirected, flags, mode);
     }
     return ret;
-#else
-    return -ENOSYS;
-#endif
-}
-
-static long handle_raw_faccessat(int dirfd, const char *pathname, int mode, int flags) {
-    if (is_problematic_path(dirfd, pathname)) {
-        return -ENOENT;
-    }
-    char red_buf[2048];
-    const char *redirected = IO::redirectPathBuf(pathname, red_buf, sizeof(red_buf));
-#if defined(__NR_faccessat)
-    return raw_syscall6(__NR_faccessat, dirfd, (long) redirected, mode, flags, 0, 0);
-#else
-    return -ENOSYS;
-#endif
-}
-
-static long handle_raw_fstatat(int dirfd, const char *pathname, void *statbuf, int flags) {
-    if (is_problematic_path(dirfd, pathname)) {
-        return -ENOENT;
-    }
-    char red_buf[2048];
-    const char *redirected = IO::redirectPathBuf(pathname, red_buf, sizeof(red_buf));
-    return sys_fstatat_raw(dirfd, redirected, statbuf, flags);
-}
-
-static long handle_raw_unlinkat(int dirfd, const char *pathname, int flags) {
-    char red_buf[2048];
-    const char *redirected = IO::redirectPathBuf(pathname, red_buf, sizeof(red_buf));
-#if defined(__NR_unlinkat)
-    return raw_syscall6(__NR_unlinkat, dirfd, (long) redirected, flags, 0, 0, 0);
-#else
-    return -ENOSYS;
-#endif
-}
-
-static long handle_raw_renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, unsigned int flags) {
-    char red_old_buf[2048];
-    char red_new_buf[2048];
-    const char *red_old = IO::redirectPathBuf(oldpath, red_old_buf, sizeof(red_old_buf));
-    const char *red_new = IO::redirectPathBuf(newpath, red_new_buf, sizeof(red_new_buf));
-    if (red_new && strstr(red_new, "/blackbox/") != nullptr) {
-        ensure_parent_dirs(red_new);
-    }
-#if defined(__NR_renameat2)
-    return raw_syscall6(__NR_renameat2, olddirfd, (long) red_old, newdirfd, (long) red_new, flags, 0);
-#elif defined(__NR_renameat)
-    return raw_syscall6(__NR_renameat, olddirfd, (long) red_old, newdirfd, (long) red_new, 0, 0);
-#else
-    return -ENOSYS;
-#endif
-}
-
-static long handle_raw_fchmodat(int dirfd, const char *pathname, mode_t mode, int flags) {
-    char red_buf[2048];
-    const char *redirected = IO::redirectPathBuf(pathname, red_buf, sizeof(red_buf));
-#if defined(__NR_fchmodat)
-    return raw_syscall6(__NR_fchmodat, dirfd, (long) redirected, mode, flags, 0, 0);
-#else
-    return -ENOSYS;
-#endif
-}
-
-static long handle_raw_readlinkat(int dirfd, const char *pathname, char *buf, size_t bufsiz) {
-    if (is_problematic_path(dirfd, pathname)) {
-        return -ENOENT;
-    }
-    char red_buf[2048];
-    const char *redirected = IO::redirectPathBuf(pathname, red_buf, sizeof(red_buf));
-#if defined(__NR_readlinkat)
-    long ret = raw_syscall6(__NR_readlinkat, dirfd, (long) redirected, (long) buf, (long) bufsiz, 0, 0);
-    if (ret > 0 && buf && bufsiz > 0) {
-        char tmp[2048];
-        size_t copy_len = ((size_t) ret < sizeof(tmp) - 1) ? (size_t) ret : (sizeof(tmp) - 1);
-        memcpy(tmp, buf, copy_len);
-        tmp[copy_len] = '\0';
-
-        // Hide our memfd spoofing from /proc/self/fd/<fd> readlinkat checks in libthemis.so
-        if (strncmp(tmp, "/memfd:anon_", 12) == 0) {
-            const char *fake_target = "/proc/self/status";
-            if (strstr(tmp, "anon_stat") && !strstr(tmp, "anon_status")) {
-                fake_target = "/proc/self/stat";
-            } else if (strstr(tmp, "anon_wchan")) {
-                fake_target = "/proc/self/wchan";
-            } else if (strstr(tmp, "anon_maps")) {
-                fake_target = "/proc/self/maps";
-            }
-            size_t fake_len = strlen(fake_target);
-            if (fake_len > bufsiz) fake_len = bufsiz;
-            memcpy(buf, fake_target, fake_len);
-            return (long) fake_len;
-        }
-
-        // Strip /data/.../blackbox prefix from redirected fd symlinks
-        const char *bb_marker = strstr(tmp, "/blackbox/data/");
-        if (bb_marker != nullptr) {
-            const char *after_bb = bb_marker + 9; // strlen("/blackbox") == 9
-            size_t new_len = strlen(after_bb);
-            if (new_len > bufsiz) new_len = bufsiz;
-            memcpy(buf, after_bb, new_len);
-            return (long) new_len;
-        }
-    }
-    return ret;
-#else
-    return -ENOSYS;
-#endif
-}
-
-static long handle_raw_inotify_add_watch(int fd, const char *pathname, uint32_t mask) {
-    if (pathname && (strncmp(pathname, "/proc/", 6) == 0 ||
-                     strstr(pathname, "/mem") != nullptr ||
-                     strstr(pathname, "/maps") != nullptr ||
-                     strstr(pathname, "/pagemap") != nullptr ||
-                     strstr(pathname, "/task") != nullptr ||
-                     strstr(pathname, "/status") != nullptr ||
-                     strstr(pathname, "/stat") != nullptr)) {
-#if defined(__NR_inotify_add_watch)
-        return raw_syscall6(__NR_inotify_add_watch, fd, (long) "/dev/null", mask, 0, 0, 0);
-#endif
-    }
-    char red_buf[2048];
-    const char *redirected = IO::redirectPathBuf(pathname, red_buf, sizeof(red_buf));
-#if defined(__NR_inotify_add_watch)
-    return raw_syscall6(__NR_inotify_add_watch, fd, (long) redirected, mask, 0, 0, 0);
-#else
-    return -ENOSYS;
-#endif
-}
-
-static int new_mkdirat(int dirfd, const char *pathname, mode_t mode) {
-    return (int) set_errno_if_neg(handle_raw_mkdirat(dirfd, pathname, mode));
-}
-
-static int new_mkdir(const char *pathname, mode_t mode) {
-    return (int) set_errno_if_neg(handle_raw_mkdirat(AT_FDCWD, pathname, mode));
 }
 
 static int new_openat(int dirfd, const char *pathname, int flags, ...) {
@@ -737,7 +492,7 @@ static int new_openat(int dirfd, const char *pathname, int flags, ...) {
         mode = (mode_t) va_arg(args, unsigned int);
         va_end(args);
     }
-    return (int) set_errno_if_neg(handle_raw_openat(dirfd, pathname, flags, mode));
+    return handle_openat(dirfd, pathname, flags, mode);
 }
 
 static int new_openat64(int dirfd, const char *pathname, int flags, ...) {
@@ -748,11 +503,72 @@ static int new_openat64(int dirfd, const char *pathname, int flags, ...) {
         mode = (mode_t) va_arg(args, unsigned int);
         va_end(args);
     }
-    return (int) set_errno_if_neg(handle_raw_openat(dirfd, pathname, flags, mode));
+    if (orig_openat) {
+        return handle_openat(dirfd, pathname, flags, mode);
+    }
+    if (is_problematic_path(dirfd, pathname)) {
+        errno = ENOENT;
+        return -1;
+    }
+    if (is_proc_pagemap_path(pathname)) {
+        errno = EACCES;
+        return -1;
+    }
+    if (is_proc_status_path(pathname)) {
+        int sfd = open_filtered_status_fd(dirfd, pathname);
+        if (sfd >= 0) return sfd;
+    }
+    if (is_proc_stat_path(pathname)) {
+        int stfd = open_filtered_stat_fd(dirfd, pathname);
+        if (stfd >= 0) return stfd;
+    }
+    if (is_proc_wchan_path(pathname)) {
+        int wfd = open_filtered_wchan_fd();
+        if (wfd >= 0) return wfd;
+    }
+    if (is_self_maps_path(pathname)) {
+        int mfd = open_filtered_maps_fd();
+        if (mfd >= 0) return mfd;
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    int ret = orig_openat64(dirfd, redirected, flags, mode);
+    if (ret == -1 && errno == ENOENT && (flags & O_CREAT) && redirected && strstr(redirected, "/blackbox/") != nullptr) {
+        ensure_parent_dirs(redirected);
+        ret = orig_openat64(dirfd, redirected, flags, mode);
+    }
+    return ret;
 }
 
 static int new___openat_2(int dirfd, const char *pathname, int flags) {
-    return (int) set_errno_if_neg(handle_raw_openat(dirfd, pathname, flags, 0));
+    if (orig_openat) {
+        return handle_openat(dirfd, pathname, flags, 0);
+    }
+    if (is_problematic_path(dirfd, pathname)) {
+        errno = ENOENT;
+        return -1;
+    }
+    if (is_proc_pagemap_path(pathname)) {
+        errno = EACCES;
+        return -1;
+    }
+    if (is_proc_status_path(pathname)) {
+        int sfd = open_filtered_status_fd(dirfd, pathname);
+        if (sfd >= 0) return sfd;
+    }
+    if (is_proc_stat_path(pathname)) {
+        int stfd = open_filtered_stat_fd(dirfd, pathname);
+        if (stfd >= 0) return stfd;
+    }
+    if (is_proc_wchan_path(pathname)) {
+        int wfd = open_filtered_wchan_fd();
+        if (wfd >= 0) return wfd;
+    }
+    if (is_self_maps_path(pathname)) {
+        int mfd = open_filtered_maps_fd();
+        if (mfd >= 0) return mfd;
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig___openat_2(dirfd, redirected, flags);
 }
 
 static int new_open(const char *pathname, int flags, ...) {
@@ -763,7 +579,15 @@ static int new_open(const char *pathname, int flags, ...) {
         mode = (mode_t) va_arg(args, unsigned int);
         va_end(args);
     }
-    return (int) set_errno_if_neg(handle_raw_openat(AT_FDCWD, pathname, flags, mode));
+    if (orig_openat) {
+        return handle_openat(AT_FDCWD, pathname, flags, mode);
+    }
+    if (is_problematic_path(AT_FDCWD, pathname)) {
+        errno = ENOENT;
+        return -1;
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_open(redirected, flags, mode);
 }
 
 static int new_open64(const char *pathname, int flags, ...) {
@@ -774,11 +598,27 @@ static int new_open64(const char *pathname, int flags, ...) {
         mode = (mode_t) va_arg(args, unsigned int);
         va_end(args);
     }
-    return (int) set_errno_if_neg(handle_raw_openat(AT_FDCWD, pathname, flags, mode));
+    if (orig_openat) {
+        return handle_openat(AT_FDCWD, pathname, flags, mode);
+    }
+    if (is_problematic_path(AT_FDCWD, pathname)) {
+        errno = ENOENT;
+        return -1;
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_open64(redirected, flags, mode);
 }
 
 static int new___open_2(const char *pathname, int flags) {
-    return (int) set_errno_if_neg(handle_raw_openat(AT_FDCWD, pathname, flags, 0));
+    if (orig_openat) {
+        return handle_openat(AT_FDCWD, pathname, flags, 0);
+    }
+    if (is_problematic_path(AT_FDCWD, pathname)) {
+        errno = ENOENT;
+        return -1;
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig___open_2(redirected, flags);
 }
 
 static FILE *new_fopen(const char *pathname, const char *mode) {
@@ -786,12 +626,16 @@ static FILE *new_fopen(const char *pathname, const char *mode) {
         errno = ENOENT;
         return nullptr;
     }
+    if (is_proc_pagemap_path(pathname)) {
+        errno = EACCES;
+        return nullptr;
+    }
     if (is_proc_status_path(pathname)) {
         int sfd = open_filtered_status_fd(AT_FDCWD, pathname);
         if (sfd >= 0) {
             FILE *sfp = fdopen(sfd, mode ? mode : "r");
             if (sfp) return sfp;
-            sys_close_raw(sfd);
+            close(sfd);
         }
     }
     if (is_proc_stat_path(pathname)) {
@@ -799,7 +643,7 @@ static FILE *new_fopen(const char *pathname, const char *mode) {
         if (stfd >= 0) {
             FILE *stfp = fdopen(stfd, mode ? mode : "r");
             if (stfp) return stfp;
-            sys_close_raw(stfd);
+            close(stfd);
         }
     }
     if (is_proc_wchan_path(pathname)) {
@@ -807,15 +651,15 @@ static FILE *new_fopen(const char *pathname, const char *mode) {
         if (wfd >= 0) {
             FILE *wfp = fdopen(wfd, mode ? mode : "r");
             if (wfp) return wfp;
-            sys_close_raw(wfd);
+            close(wfd);
         }
     }
     if (is_self_maps_path(pathname)) {
-        int mfd = open_filtered_maps_fd(AT_FDCWD, pathname);
+        int mfd = open_filtered_maps_fd();
         if (mfd >= 0) {
             FILE *mfp = fdopen(mfd, mode ? mode : "r");
             if (mfp) return mfp;
-            sys_close_raw(mfd);
+            close(mfd);
         }
     }
     const char *redirected = IO::redirectPath(pathname);
@@ -834,341 +678,294 @@ static DIR *new_opendir(const char *name) {
         return nullptr;
     }
     const char *redirected = IO::redirectPath(name);
-    return orig_opendir(redirected);
+    DIR *dirp = orig_opendir(redirected);
+    if (dirp && !g_is_excluded_app && name &&
+        (strcmp(name, "/proc") == 0 || strcmp(name, "/proc/") == 0)) {
+        register_proc_dir(dirp);
+    }
+    return dirp;
+}
+
+static int new_closedir(DIR *dirp) {
+    unregister_proc_dir(dirp);
+    return orig_closedir(dirp);
+}
+
+static struct dirent *new_readdir(DIR *dirp) {
+    bool filter_proc = (!g_is_excluded_app && is_proc_dir(dirp));
+    while (true) {
+        struct dirent *ent = orig_readdir(dirp);
+        if (!ent) return nullptr;
+        if (filter_proc && is_other_pid_name(ent->d_name)) {
+            continue;
+        }
+        return ent;
+    }
+}
+
+static struct dirent64 *new_readdir64(DIR *dirp) {
+    bool filter_proc = (!g_is_excluded_app && is_proc_dir(dirp));
+    while (true) {
+        struct dirent64 *ent = orig_readdir64(dirp);
+        if (!ent) return nullptr;
+        if (filter_proc && is_other_pid_name(ent->d_name)) {
+            continue;
+        }
+        return ent;
+    }
 }
 
 static int new_faccessat(int dirfd, const char *pathname, int mode, int flags) {
-    return (int) set_errno_if_neg(handle_raw_faccessat(dirfd, pathname, mode, flags));
+    if (is_problematic_path(dirfd, pathname)) {
+        errno = ENOENT;
+        return -1;
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_faccessat(dirfd, redirected, mode, flags);
 }
 
 static int new_access(const char *pathname, int mode) {
-    return (int) set_errno_if_neg(handle_raw_faccessat(AT_FDCWD, pathname, mode, 0));
+    if (orig_faccessat) {
+        return new_faccessat(AT_FDCWD, pathname, mode, 0);
+    }
+    if (is_problematic_path(AT_FDCWD, pathname)) {
+        errno = ENOENT;
+        return -1;
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_access(redirected, mode);
 }
 
 static int new_fstatat(int dirfd, const char *pathname, struct stat *statbuf, int flags) {
-    return (int) set_errno_if_neg(handle_raw_fstatat(dirfd, pathname, statbuf, flags));
+    if (is_problematic_path(dirfd, pathname)) {
+        errno = ENOENT;
+        return -1;
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_fstatat(dirfd, redirected, statbuf, flags);
 }
 
 static int new_fstatat64(int dirfd, const char *pathname, struct stat64 *statbuf, int flags) {
-    return (int) set_errno_if_neg(handle_raw_fstatat(dirfd, pathname, statbuf, flags));
+    if (is_problematic_path(dirfd, pathname)) {
+        errno = ENOENT;
+        return -1;
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_fstatat64(dirfd, redirected, statbuf, flags);
 }
 
 static int new_stat(const char *pathname, struct stat *statbuf) {
-    return (int) set_errno_if_neg(handle_raw_fstatat(AT_FDCWD, pathname, statbuf, 0));
+    if (orig_fstatat) {
+        return new_fstatat(AT_FDCWD, pathname, statbuf, 0);
+    }
+    if (is_problematic_path(AT_FDCWD, pathname)) {
+        errno = ENOENT;
+        return -1;
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_stat(redirected, statbuf);
 }
 
 static int new_lstat(const char *pathname, struct stat *statbuf) {
-    return (int) set_errno_if_neg(handle_raw_fstatat(AT_FDCWD, pathname, statbuf, AT_SYMLINK_NOFOLLOW));
+    if (orig_fstatat) {
+        return new_fstatat(AT_FDCWD, pathname, statbuf, AT_SYMLINK_NOFOLLOW);
+    }
+    if (is_problematic_path(AT_FDCWD, pathname)) {
+        errno = ENOENT;
+        return -1;
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_lstat(redirected, statbuf);
 }
 
 static int new_unlinkat(int dirfd, const char *pathname, int flags) {
-    return (int) set_errno_if_neg(handle_raw_unlinkat(dirfd, pathname, flags));
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_unlinkat(dirfd, redirected, flags);
 }
 
 static int new_unlink(const char *pathname) {
-    return (int) set_errno_if_neg(handle_raw_unlinkat(AT_FDCWD, pathname, 0));
+    if (orig_unlinkat) {
+        return new_unlinkat(AT_FDCWD, pathname, 0);
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_unlink(redirected);
 }
 
 static int new_rmdir(const char *pathname) {
-    return (int) set_errno_if_neg(handle_raw_unlinkat(AT_FDCWD, pathname, AT_REMOVEDIR));
+    if (orig_unlinkat) {
+        return new_unlinkat(AT_FDCWD, pathname, AT_REMOVEDIR);
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_rmdir(redirected);
 }
 
 static int new_renameat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath) {
-    return (int) set_errno_if_neg(handle_raw_renameat2(olddirfd, oldpath, newdirfd, newpath, 0));
+    const char *red_old = IO::redirectPath(oldpath);
+    const char *red_new = IO::redirectPath(newpath);
+    if (red_new && strstr(red_new, "/blackbox/") != nullptr) {
+        ensure_parent_dirs(red_new);
+    }
+    return orig_renameat(olddirfd, red_old, newdirfd, red_new);
 }
 
 static int new_renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, unsigned int flags) {
-    return (int) set_errno_if_neg(handle_raw_renameat2(olddirfd, oldpath, newdirfd, newpath, flags));
+    const char *red_old = IO::redirectPath(oldpath);
+    const char *red_new = IO::redirectPath(newpath);
+    if (red_new && strstr(red_new, "/blackbox/") != nullptr) {
+        ensure_parent_dirs(red_new);
+    }
+    return orig_renameat2(olddirfd, red_old, newdirfd, red_new, flags);
 }
 
 static int new_rename(const char *oldpath, const char *newpath) {
-    return (int) set_errno_if_neg(handle_raw_renameat2(AT_FDCWD, oldpath, AT_FDCWD, newpath, 0));
+    if (orig_renameat) {
+        return new_renameat(AT_FDCWD, oldpath, AT_FDCWD, newpath);
+    }
+    const char *red_old = IO::redirectPath(oldpath);
+    const char *red_new = IO::redirectPath(newpath);
+    if (red_new && strstr(red_new, "/blackbox/") != nullptr) {
+        ensure_parent_dirs(red_new);
+    }
+    return orig_rename(red_old, red_new);
 }
 
 static int new_fchmodat(int dirfd, const char *pathname, mode_t mode, int flags) {
-    return (int) set_errno_if_neg(handle_raw_fchmodat(dirfd, pathname, mode, flags));
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_fchmodat(dirfd, redirected, mode, flags);
 }
 
 static int new_chmod(const char *pathname, mode_t mode) {
-    return (int) set_errno_if_neg(handle_raw_fchmodat(AT_FDCWD, pathname, mode, 0));
+    if (orig_fchmodat) {
+        return new_fchmodat(AT_FDCWD, pathname, mode, 0);
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_chmod(redirected, mode);
 }
 
 static ssize_t new_readlinkat(int dirfd, const char *pathname, char *buf, size_t bufsiz) {
-    return (ssize_t) set_errno_if_neg(handle_raw_readlinkat(dirfd, pathname, buf, bufsiz));
+    if (is_problematic_path(dirfd, pathname)) {
+        errno = ENOENT;
+        return -1;
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    ssize_t ret = orig_readlinkat(dirfd, redirected, buf, bufsiz);
+    if (ret > 0 && buf && bufsiz > 0) {
+        char tmp[4096];
+        size_t copy_len = ((size_t) ret < sizeof(tmp) - 1) ? (size_t) ret : (sizeof(tmp) - 1);
+        memcpy(tmp, buf, copy_len);
+        tmp[copy_len] = '\0';
+
+        // Spoof memfd symlink target to real kernel procfs dentry format "/proc/<numeric_pid>/..."
+        if (strncmp(tmp, "/memfd:anon_", 12) == 0) {
+            const char *leaf = "status";
+            if (strstr(tmp, "anon_stat") && !strstr(tmp, "anon_status")) {
+                leaf = "stat";
+            } else if (strstr(tmp, "anon_wchan")) {
+                leaf = "wchan";
+            } else if (strstr(tmp, "anon_maps")) {
+                leaf = "maps";
+            }
+            char fake_target[64];
+            int flen = snprintf(fake_target, sizeof(fake_target), "/proc/%d/%s", (int) getpid(), leaf);
+            if (flen > 0) {
+                size_t out_len = ((size_t) flen < bufsiz) ? (size_t) flen : bufsiz;
+                memcpy(buf, fake_target, out_len);
+                return (ssize_t) out_len;
+            }
+        }
+
+        // If the resolved symlink target contains /data/.../blackbox/data/..., strip the /blackbox prefix
+        const char *bb_marker = strstr(tmp, "/blackbox/data/");
+        if (bb_marker != nullptr) {
+            const char *after_bb = bb_marker + strlen("/blackbox");
+            size_t new_len = strlen(after_bb);
+            if (new_len > bufsiz) new_len = bufsiz;
+            memcpy(buf, after_bb, new_len);
+            return (ssize_t) new_len;
+        }
+    }
+    return ret;
 }
 
 static ssize_t new_readlink(const char *pathname, char *buf, size_t bufsiz) {
-    return (ssize_t) set_errno_if_neg(handle_raw_readlinkat(AT_FDCWD, pathname, buf, bufsiz));
+    if (orig_readlinkat) {
+        return new_readlinkat(AT_FDCWD, pathname, buf, bufsiz);
+    }
+    if (is_problematic_path(AT_FDCWD, pathname)) {
+        errno = ENOENT;
+        return -1;
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_readlink(redirected, buf, bufsiz);
 }
 
 static int new_inotify_add_watch(int fd, const char *pathname, uint32_t mask) {
-    return (int) set_errno_if_neg(handle_raw_inotify_add_watch(fd, pathname, mask));
+    // Prevent anti-cheat (e.g. libthemis.so / libtersafe2.so) from placing inotify watchers on /proc/self/mem, /proc/self/maps, /proc/self/pagemap, /proc/self/task
+    if (pathname && (strncmp(pathname, "/proc/", 6) == 0 ||
+                     strstr(pathname, "/mem") != nullptr ||
+                     strstr(pathname, "/maps") != nullptr ||
+                     strstr(pathname, "/pagemap") != nullptr ||
+                     strstr(pathname, "/task") != nullptr ||
+                     strstr(pathname, "/status") != nullptr ||
+                     strstr(pathname, "/stat") != nullptr)) {
+        return orig_inotify_add_watch(fd, "/dev/null", mask);
+    }
+    const char *redirected = IO::redirectPath(pathname);
+    return orig_inotify_add_watch(fd, redirected, mask);
 }
 
-// ============================================================================
-// Safe Non-Libc Seccomp-BPF Interceptor (with Whitelisted raw_syscall6 PC)
-// ============================================================================
-#ifndef SECCOMP_RET_ALLOW
-#define SECCOMP_RET_ALLOW 0x7fff0000U
-#endif
-#ifndef SECCOMP_RET_TRAP
-#define SECCOMP_RET_TRAP  0x00030000U
-#endif
-#ifndef SYS_SECCOMP
-#define SYS_SECCOMP 1
-#endif
-
-static void seccomp_sigsys_handler(int signo, siginfo_t *info, void *context) {
-    if (signo != SIGSYS || !info || !context || info->si_code != SYS_SECCOMP) {
-        return;
+// Neutralize mincore() honey-pot memory page traps (StartMemoryTracker / libtersafe2.so / libtprt.so):
+// Anti-cheat allocates untouched anonymous rw-p pages and polls mincore(); when GG scans memory via /proc/<pid>/mem,
+// the kernel faults those pages into RAM (vec[i] |= 1). Reporting vec[i] = 0 hides external memory scans completely.
+static int new_mincore(void *addr, size_t length, unsigned char *vec) {
+    int ret = orig_mincore ? orig_mincore(addr, length, vec) : -1;
+    if (ret == 0 && vec != nullptr && !g_is_excluded_app) {
+        long page_size = sysconf(_SC_PAGESIZE);
+        if (page_size <= 0) page_size = 4096;
+        size_t num_pages = (length + (size_t) page_size - 1) / (size_t) page_size;
+        memset(vec, 0, num_pages);
     }
-    ucontext_t *uc = (ucontext_t *) context;
-
-#if defined(__aarch64__)
-    long nr = (long) info->si_syscall;
-    long a0 = (long) uc->uc_mcontext.regs[0];
-    long a1 = (long) uc->uc_mcontext.regs[1];
-    long a2 = (long) uc->uc_mcontext.regs[2];
-    long a3 = (long) uc->uc_mcontext.regs[3];
-    long a4 = (long) uc->uc_mcontext.regs[4];
-    long a5 = (long) uc->uc_mcontext.regs[5];
-#elif defined(__arm__)
-    long nr = (long) info->si_syscall;
-    long a0 = (long) uc->uc_mcontext.arm_r0;
-    long a1 = (long) uc->uc_mcontext.arm_r1;
-    long a2 = (long) uc->uc_mcontext.arm_r2;
-    long a3 = (long) uc->uc_mcontext.arm_r3;
-    long a4 = (long) uc->uc_mcontext.arm_r4;
-    long a5 = (long) uc->uc_mcontext.arm_r5;
-#else
-    return;
-#endif
-
-    long ret = -ENOSYS;
-    switch (nr) {
-#if defined(__NR_openat)
-        case __NR_openat:
-            ret = handle_raw_openat((int) a0, (const char *) a1, (int) a2, (mode_t) a3);
-            break;
-#endif
-#if defined(__NR_faccessat)
-        case __NR_faccessat:
-            ret = handle_raw_faccessat((int) a0, (const char *) a1, (int) a2, (int) a3);
-            break;
-#endif
-#if defined(__NR_newfstatat)
-        case __NR_newfstatat:
-            ret = handle_raw_fstatat((int) a0, (const char *) a1, (void *) a2, (int) a3);
-            break;
-#endif
-#if defined(__NR_fstatat64)
-        case __NR_fstatat64:
-            ret = handle_raw_fstatat((int) a0, (const char *) a1, (void *) a2, (int) a3);
-            break;
-#endif
-#if defined(__NR_mkdirat)
-        case __NR_mkdirat:
-            ret = handle_raw_mkdirat((int) a0, (const char *) a1, (mode_t) a2);
-            break;
-#endif
-#if defined(__NR_unlinkat)
-        case __NR_unlinkat:
-            ret = handle_raw_unlinkat((int) a0, (const char *) a1, (int) a2);
-            break;
-#endif
-#if defined(__NR_renameat)
-        case __NR_renameat:
-            ret = handle_raw_renameat2((int) a0, (const char *) a1, (int) a2, (const char *) a3, 0);
-            break;
-#endif
-#if defined(__NR_renameat2)
-        case __NR_renameat2:
-            ret = handle_raw_renameat2((int) a0, (const char *) a1, (int) a2, (const char *) a3, (unsigned int) a4);
-            break;
-#endif
-#if defined(__NR_fchmodat)
-        case __NR_fchmodat:
-            ret = handle_raw_fchmodat((int) a0, (const char *) a1, (mode_t) a2, (int) a3);
-            break;
-#endif
-#if defined(__NR_readlinkat)
-        case __NR_readlinkat:
-            ret = handle_raw_readlinkat((int) a0, (const char *) a1, (char *) a2, (size_t) a3);
-            break;
-#endif
-#if defined(__NR_inotify_add_watch)
-        case __NR_inotify_add_watch:
-            ret = handle_raw_inotify_add_watch((int) a0, (const char *) a1, (uint32_t) a2);
-            break;
-#endif
-        default:
-            ret = raw_syscall6(nr, a0, a1, a2, a3, a4, a5);
-            break;
-    }
-
-#if defined(__aarch64__)
-    uc->uc_mcontext.regs[0] = (uint64_t) ret;
-#elif defined(__arm__)
-    uc->uc_mcontext.arm_r0 = (unsigned long) ret;
-#endif
+    return ret;
 }
 
-static bool find_libc_exec_range(uintptr_t *out_start, uintptr_t *out_end) {
-    FILE *fp = orig_fopen ? orig_fopen("/proc/self/maps", "r") : fopen("/proc/self/maps", "r");
-    if (!fp) return false;
-    uintptr_t min_start = UINTPTR_MAX;
-    uintptr_t max_end = 0;
-    char line[1024];
-    while (fgets(line, sizeof(line), fp)) {
-        if (strstr(line, "/libc.so") != nullptr && strstr(line, "r-xp") != nullptr) {
-            uintptr_t start = 0, end = 0;
-            if (sscanf(line, "%lx-%lx", (unsigned long *) &start, (unsigned long *) &end) == 2) {
-                if (start < min_start) min_start = start;
-                if (end > max_end) max_end = end;
-            }
+// Neutralize libthemis.so background watchdog thread (0xc1240) AFTER its 1st login iteration completes:
+// At login ("正在进入游戏"), 0xc18d8 spawns 0xc1240 and waits on condvar 0xd90f0 for the 1st iteration to generate
+// the 32-byte type-4 token, call pthread_cond_broadcast(0xd90f0) at 0xc1684, and call pthread_mutex_unlock(0xd90c8) at 0xc1690.
+// Right after 0xc1690, 0xc1240 loops in nanosleep (0xc16dc: svc #0) and wakes up on EINTR (errno == 4) whenever GG attaches
+// ptrace during a memory search, immediately calling 0x3b918 -> 0x3b788 -> 0xbf448 -> exit(1).
+// By freezing 0xc1240 inside pthread_mutex_unlock right after it broadcasts 0xd90f0 and unlocks 0xd90c8,
+// login ("正在进入游戏") succeeds 100% AND 0xc1240 never executes a 2nd scan when GG searches memory!
+static thread_local bool t_themis_watchdog_broadcasted = false;
+
+static bool is_caller_in_libthemis(void *ret_addr) {
+    if (!ret_addr) return false;
+    Dl_info info{};
+    if (dladdr(ret_addr, &info) != 0 && info.dli_fname) {
+        if (strstr(info.dli_fname, "libthemis.so") != nullptr) {
+            return true;
         }
-    }
-    fclose(fp);
-    if (min_start < max_end) {
-        *out_start = min_start;
-        *out_end = max_end;
-        return true;
     }
     return false;
 }
 
-static void install_seccomp_filter() {
-#if defined(__aarch64__) || defined(__arm__)
-    uintptr_t libc_start = 0, libc_end = 0;
-    if (!find_libc_exec_range(&libc_start, &libc_end)) {
-        ALOGE("FileSystemHook: Could not locate libc.so r-xp range for Seccomp whitelist");
-        return;
+static int new_pthread_cond_broadcast(pthread_cond_t *cond) {
+    int ret = orig_pthread_cond_broadcast(cond);
+    if (!g_is_excluded_app && is_caller_in_libthemis(__builtin_return_address(0))) {
+        t_themis_watchdog_broadcasted = true;
     }
+    return ret;
+}
 
-    uintptr_t raw_start = (uintptr_t) &raw_syscall6;
-    uintptr_t raw_end = (uintptr_t) &raw_syscall6_end;
-#if defined(__arm__)
-    raw_start &= ~(uintptr_t) 1;
-    raw_end &= ~(uintptr_t) 1;
-#endif
-    if (raw_end <= raw_start) {
-        raw_end = raw_start + 64;
+static int new_pthread_mutex_unlock(pthread_mutex_t *mutex) {
+    int ret = orig_pthread_mutex_unlock(mutex);
+    if (t_themis_watchdog_broadcasted && !g_is_excluded_app && is_caller_in_libthemis(__builtin_return_address(0))) {
+        ALOGD("FileSystemHook: Freezing libthemis.so background watchdog thread 0xc1240 (tid=%d) after 1st login iteration", (int) gettid());
+        while (true) {
+            struct timespec ts = {3600, 0};
+            nanosleep(&ts, nullptr);
+        }
     }
-
-    struct sigaction sa{};
-    sa.sa_sigaction = seccomp_sigsys_handler;
-    sa.sa_flags = SA_SIGINFO | SA_NODEFER;
-    sigemptyset(&sa.sa_mask);
-    if (sigaction(SIGSYS, &sa, nullptr) != 0) {
-        ALOGE("FileSystemHook: sigaction(SIGSYS) failed: %d", errno);
-        return;
-    }
-
-    struct sock_filter filter[64];
-    int n = 0;
-
-    // 1. Load syscall number
-    filter[n++] = BPF_STMT(BPF_LD | BPF_W | BPF_ABS, (uint32_t) offsetof(struct seccomp_data, nr));
-
-    // Collect target syscalls to trap
-    uint32_t targets[] = {
-#if defined(__NR_openat)
-        __NR_openat,
-#endif
-#if defined(__NR_faccessat)
-        __NR_faccessat,
-#endif
-#if defined(__NR_newfstatat)
-        __NR_newfstatat,
-#endif
-#if defined(__NR_fstatat64)
-        __NR_fstatat64,
-#endif
-#if defined(__NR_mkdirat)
-        __NR_mkdirat,
-#endif
-#if defined(__NR_unlinkat)
-        __NR_unlinkat,
-#endif
-#if defined(__NR_renameat)
-        __NR_renameat,
-#endif
-#if defined(__NR_renameat2)
-        __NR_renameat2,
-#endif
-#if defined(__NR_fchmodat)
-        __NR_fchmodat,
-#endif
-#if defined(__NR_readlinkat)
-        __NR_readlinkat,
-#endif
-#if defined(__NR_inotify_add_watch)
-        __NR_inotify_add_watch,
-#endif
-    };
-    const int num_targets = (int) (sizeof(targets) / sizeof(targets[0]));
-    for (int i = 0; i < num_targets; ++i) {
-        uint8_t jt = (uint8_t) (num_targets - i);
-        filter[n++] = BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, targets[i], jt, 0);
-    }
-    // Non-target syscall -> ALLOW immediately
-    filter[n++] = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
-
-#if defined(__aarch64__)
-    uint32_t raw_hi = (uint32_t) (raw_start >> 32);
-    uint32_t raw_lo_start = (uint32_t) (raw_start & 0xffffffffULL);
-    uint32_t raw_lo_end = (uint32_t) (raw_end & 0xffffffffULL);
-
-    uint32_t libc_hi = (uint32_t) (libc_start >> 32);
-    uint32_t libc_lo_start = (uint32_t) (libc_start & 0xffffffffULL);
-    uint32_t libc_lo_end = (uint32_t) (libc_end & 0xffffffffULL);
-
-    // 2. Check if PC is inside [raw_syscall6, raw_syscall6_end) -> ALLOW
-    filter[n++] = BPF_STMT(BPF_LD | BPF_W | BPF_ABS, (uint32_t) offsetof(struct seccomp_data, instruction_pointer) + 4);
-    filter[n++] = BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, raw_hi, 0, 4);
-    filter[n++] = BPF_STMT(BPF_LD | BPF_W | BPF_ABS, (uint32_t) offsetof(struct seccomp_data, instruction_pointer));
-    filter[n++] = BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, raw_lo_start, 0, 2);
-    filter[n++] = BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, raw_lo_end, 1, 0);
-    filter[n++] = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
-
-    // 3. Check if PC is inside [libc_start, libc_end) -> ALLOW
-    filter[n++] = BPF_STMT(BPF_LD | BPF_W | BPF_ABS, (uint32_t) offsetof(struct seccomp_data, instruction_pointer) + 4);
-    filter[n++] = BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, libc_hi, 0, 4);
-    filter[n++] = BPF_STMT(BPF_LD | BPF_W | BPF_ABS, (uint32_t) offsetof(struct seccomp_data, instruction_pointer));
-    filter[n++] = BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, libc_lo_start, 0, 2);
-    filter[n++] = BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, libc_lo_end, 1, 0);
-    filter[n++] = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
-
-    // 4. Direct inline svc #0 outside libc.so and outside raw_syscall6 (e.g. libthemis.so) -> TRAP
-    filter[n++] = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP);
-#elif defined(__arm__)
-    // 2. Check if PC is inside [raw_start, raw_end) -> ALLOW
-    filter[n++] = BPF_STMT(BPF_LD | BPF_W | BPF_ABS, (uint32_t) offsetof(struct seccomp_data, instruction_pointer));
-    filter[n++] = BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, (uint32_t) raw_start, 0, 2);
-    filter[n++] = BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, (uint32_t) raw_end, 1, 0);
-    filter[n++] = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
-
-    // 3. Check if PC is inside [libc_start, libc_end) -> ALLOW
-    filter[n++] = BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, (uint32_t) libc_start, 0, 2);
-    filter[n++] = BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, (uint32_t) libc_end, 1, 0);
-    filter[n++] = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
-
-    // 4. Direct inline svc #0 outside libc.so -> TRAP
-    filter[n++] = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP);
-#endif
-
-    struct sock_fprog prog{};
-    prog.len = (unsigned short) n;
-    prog.filter = filter;
-
-    prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-    if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog, 0, 0) == 0) {
-        ALOGD("FileSystemHook: Installed Seccomp-BPF filter (raw_syscall6=%p..%p, libc=%p..%p)",
-              (void *) raw_start, (void *) raw_end, (void *) libc_start, (void *) libc_end);
-    } else {
-        ALOGE("FileSystemHook: Failed to install Seccomp-BPF filter: %d", errno);
-    }
-#endif
+    return ret;
 }
 
 static uintptr_t g_hooked_addrs[64];
@@ -1234,7 +1031,6 @@ static void hook_libc_symbol(void *handle, const char *name, void *replace_func,
 }
 
 void FileSystemHook::init() {
-    g_self_pid = getpid();
     if (!g_anti_cheat_bypass_enabled || g_is_excluded_app) {
         ALOGD("FileSystemHook: Skipped (enabled=%d, excluded=%d, pkg=%s)",
               g_anti_cheat_bypass_enabled ? 1 : 0, g_is_excluded_app ? 1 : 0, g_current_package);
@@ -1263,14 +1059,18 @@ void FileSystemHook::init() {
     hook_libc_symbol(handle, "fchmodat", (void *) new_fchmodat, (void **) &orig_fchmodat);
     hook_libc_symbol(handle, "readlinkat", (void *) new_readlinkat, (void **) &orig_readlinkat);
     hook_libc_symbol(handle, "inotify_add_watch", (void *) new_inotify_add_watch, (void **) &orig_inotify_add_watch);
+    hook_libc_symbol(handle, "mincore", (void *) new_mincore, (void **) &orig_mincore);
 
-    // Hook non-*at functions
+    // Hook non-*at functions & directory iterators
     hook_libc_symbol(handle, "mkdir", (void *) new_mkdir, (void **) &orig_mkdir);
     hook_libc_symbol(handle, "open", (void *) new_open, (void **) &orig_open);
     hook_libc_symbol(handle, "open64", (void *) new_open64, (void **) &orig_open64);
     hook_libc_symbol(handle, "__open_2", (void *) new___open_2, (void **) &orig___open_2);
     hook_libc_symbol(handle, "fopen", (void *) new_fopen, (void **) &orig_fopen);
     hook_libc_symbol(handle, "opendir", (void *) new_opendir, (void **) &orig_opendir);
+    hook_libc_symbol(handle, "closedir", (void *) new_closedir, (void **) &orig_closedir);
+    hook_libc_symbol(handle, "readdir", (void *) new_readdir, (void **) &orig_readdir);
+    hook_libc_symbol(handle, "readdir64", (void *) new_readdir64, (void **) &orig_readdir64);
     hook_libc_symbol(handle, "access", (void *) new_access, (void **) &orig_access);
     hook_libc_symbol(handle, "stat", (void *) new_stat, (void **) &orig_stat);
     hook_libc_symbol(handle, "lstat", (void *) new_lstat, (void **) &orig_lstat);
@@ -1280,8 +1080,9 @@ void FileSystemHook::init() {
     hook_libc_symbol(handle, "chmod", (void *) new_chmod, (void **) &orig_chmod);
     hook_libc_symbol(handle, "readlink", (void *) new_readlink, (void **) &orig_readlink);
 
-    xdl_close(handle);
+    // Hook pthread synchronization to freeze libthemis.so's 0xc1240 watchdog thread after its 1st login iteration
+    hook_libc_symbol(handle, "pthread_cond_broadcast", (void *) new_pthread_cond_broadcast, (void **) &orig_pthread_cond_broadcast);
+    hook_libc_symbol(handle, "pthread_mutex_unlock", (void *) new_pthread_mutex_unlock, (void **) &orig_pthread_mutex_unlock);
 
-    // Install Seccomp-BPF filter to intercept all 229 direct inline svc #0 calls in libthemis.so / libtersafe2.so
-    install_seccomp_filter();
+    xdl_close(handle);
 }
