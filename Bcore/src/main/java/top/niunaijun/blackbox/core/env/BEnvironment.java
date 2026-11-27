@@ -206,4 +206,75 @@ public class BEnvironment {
         } catch (Throwable ignored) {
         }
     }
+
+    public static File getAntiCheatExcludeConf() {
+        return new File(getSystemDir(), "anti_cheat_exclude.conf");
+    }
+
+    public static java.util.Set<String> getAntiCheatExcludedPackages() {
+        java.util.Set<String> set = new java.util.LinkedHashSet<>();
+        try {
+            File conf = getAntiCheatExcludeConf();
+            if (!conf.exists()) {
+                return set;
+            }
+            java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(conf));
+            String line;
+            while ((line = br.readLine()) != null) {
+                String trimmed = line.trim();
+                if (!trimmed.isEmpty()) {
+                    set.add(trimmed);
+                }
+            }
+            br.close();
+        } catch (Throwable ignored) {
+        }
+        return set;
+    }
+
+    public static void setAntiCheatExcludedPackages(java.util.Set<String> packages) {
+        try {
+            FileUtils.mkdirs(getSystemDir());
+            java.io.BufferedWriter bw = new java.io.BufferedWriter(new java.io.FileWriter(getAntiCheatExcludeConf(), false));
+            if (packages != null) {
+                for (String pkg : packages) {
+                    if (pkg != null && !pkg.trim().isEmpty()) {
+                        bw.write(pkg.trim());
+                        bw.newLine();
+                    }
+                }
+            }
+            bw.flush();
+            bw.close();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public static boolean isPackageExcludedFromAntiCheat(String packageName) {
+        if (packageName == null || packageName.isEmpty()) {
+            return false;
+        }
+        if (getAntiCheatExcludedPackages().contains(packageName)) {
+            return true;
+        }
+        // Fallback auto-detection for GameGuardian randomized packages (lib5.so / lib9.so / libpl.so)
+        try {
+            File appLibDir = getAppLibDir(packageName);
+            if (appLibDir.exists()) {
+                File[] archDirs = appLibDir.listFiles();
+                if (archDirs != null) {
+                    for (File dir : archDirs) {
+                        if (new File(dir, "lib5.so").exists() || new File(dir, "lib9.so").exists() || new File(dir, "libpl.so").exists()) {
+                            return true;
+                        }
+                    }
+                }
+                if (new File(appLibDir, "lib5.so").exists() || new File(appLibDir, "lib9.so").exists() || new File(appLibDir, "libpl.so").exists()) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
 }

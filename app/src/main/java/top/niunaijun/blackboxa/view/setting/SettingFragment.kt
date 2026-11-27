@@ -30,6 +30,8 @@ class SettingFragment : PreferenceFragmentCompat() {
             antiCheatPreference
         }
 
+        initAntiCheatExcludeApps()
+
         invalidHideState {
             val rootHidePreference: Preference = (findPreference("root_hide")!!)
             val hideRoot = AppManager.mBlackBoxLoader.hideRoot()
@@ -120,6 +122,87 @@ class SettingFragment : PreferenceFragmentCompat() {
             }
         } catch (ignored: Throwable) {
         }
+    }
+
+    private fun initAntiCheatExcludeApps() {
+        val excludePref: Preference = findPreference("anti_cheat_exclude_apps") ?: return
+        updateExcludeSummary(excludePref)
+        excludePref.setOnPreferenceClickListener {
+            showExcludeAppsDialog(excludePref)
+            true
+        }
+    }
+
+    private fun updateExcludeSummary(excludePref: Preference) {
+        val excluded = top.niunaijun.blackbox.core.env.BEnvironment.getAntiCheatExcludedPackages()
+        if (excluded.isEmpty()) {
+            excludePref.summary = getString(R.string.anti_cheat_exclude_apps_summary)
+        } else {
+            excludePref.summary = "已排除 (${excluded.size}): " + excluded.joinToString(", ")
+        }
+    }
+
+    private fun showExcludeAppsDialog(excludePref: Preference) {
+        val pkgToLabel = linkedMapOf<String, String>()
+        try {
+            val core = BlackBoxCore.get()
+            val users = core.users
+            val userIds = if (users.isNullOrEmpty()) listOf(0) else users.map { it.id }
+            for (uid in userIds) {
+                val apps = core.getInstalledApplications(0, uid) ?: continue
+                for (app in apps) {
+                    val pkg = app.packageName ?: continue
+                    if (core.isBlackBoxApp(pkg)) continue
+                    if (!pkgToLabel.containsKey(pkg)) {
+                        val label = try {
+                            BlackBoxCore.getPackageManager().getApplicationLabel(app).toString()
+                        } catch (e: Exception) {
+                            pkg
+                        }
+                        pkgToLabel[pkg] = "$label ($pkg)"
+                    }
+                }
+            }
+            val appRoot = top.niunaijun.blackbox.core.env.BEnvironment.getAppRootDir()
+            appRoot.listFiles()?.forEach { dir ->
+                if (dir.isDirectory) {
+                    val pkg = dir.name
+                    if (!pkg.isNullOrBlank() && !core.isBlackBoxApp(pkg) && !pkgToLabel.containsKey(pkg)) {
+                        pkgToLabel[pkg] = pkg
+                    }
+                }
+            }
+        } catch (ignored: Throwable) {
+        }
+
+        if (pkgToLabel.isEmpty()) {
+            toast(R.string.empty_empty)
+            return
+        }
+
+        val pkgList = pkgToLabel.keys.toList()
+        val displayItems = pkgList.map { pkgToLabel[it] ?: it }.toTypedArray()
+        val currentExcluded = top.niunaijun.blackbox.core.env.BEnvironment.getAntiCheatExcludedPackages().toMutableSet()
+        val checkedItems = BooleanArray(pkgList.size) { idx -> currentExcluded.contains(pkgList[idx]) }
+
+        androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                .setTitle(R.string.anti_cheat_exclude_apps)
+                .setMultiChoiceItems(displayItems, checkedItems) { _, which, isChecked ->
+                    val pkg = pkgList[which]
+                    if (isChecked) {
+                        currentExcluded.add(pkg)
+                    } else {
+                        currentExcluded.remove(pkg)
+                    }
+                }
+                .setPositiveButton(R.string.done) { _, _ ->
+                    top.niunaijun.blackbox.core.env.BEnvironment.setAntiCheatExcludedPackages(currentExcluded)
+                    updateExcludeSummary(excludePref)
+                    stopVirtualAppProcesses()
+                    toast(R.string.restart_module)
+                }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
     }
 
     private fun initSendLogs() {

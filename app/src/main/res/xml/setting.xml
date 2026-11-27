@@ -25,6 +25,11 @@
                 app:title="@string/anti_cheat_bypass"
                 app:summary="@string/anti_cheat_bypass_summary" />
 
+        <Preference
+                app:key="anti_cheat_exclude_apps"
+                app:title="@string/anti_cheat_exclude_apps"
+                app:summary="@string/anti_cheat_exclude_apps_summary" />
+
         <SwitchPreferenceCompat
                 app:key="root_hide"
                 app:title="@string/hide_root" />

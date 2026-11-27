@@ -403,10 +403,11 @@ public class BActivityThread extends IBActivityThread.Stub {
         try {
             boolean ggEnabled = top.niunaijun.blackbox.core.env.BEnvironment.isGGCompatEnabled();
             boolean antiCheatEnabled = top.niunaijun.blackbox.core.env.BEnvironment.isAntiCheatBypassEnabled();
-            boolean isGGApp = (applicationInfo.className != null && applicationInfo.className.startsWith("android.ext."))
+            boolean isExcludedGG = top.niunaijun.blackbox.core.env.BEnvironment.isPackageExcludedFromAntiCheat(packageName)
+                    || (applicationInfo.className != null && applicationInfo.className.startsWith("android.ext."))
                     || (packageName != null && (packageName.contains("catch_.me_.if_.you_.can_") || packageName.contains("gameguardian")));
             NativeCore.setGGMode(ggEnabled);
-            NativeCore.setAntiCheatBypass(antiCheatEnabled, packageName != null ? packageName : "", isGGApp);
+            NativeCore.setAntiCheatBypass(antiCheatEnabled && !isExcludedGG, packageName != null ? packageName : "", isExcludedGG);
         } catch (Throwable t) {
             Slog.w(TAG, "Error configuring GG / anti-cheat mode: " + t.getMessage());
         }

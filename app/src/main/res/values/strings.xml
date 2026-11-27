@@ -71,4 +71,6 @@
     <string name="gg_compat_mode_summary">Allow GameGuardian to scan and modify virtual app memory without root (turn off when unused to hide dumpable state)</string>
     <string name="anti_cheat_bypass">Anti-Cheat Deep Bypass (Seccomp/I/O/Maps)</string>
     <string name="anti_cheat_bypass_summary">Enable native libc I/O redirection, kernel Seccomp-BPF svc #0 interception, and /proc/self/maps stealth</string>
+    <string name="anti_cheat_exclude_apps">Anti-Cheat Bypass Excluded Apps (Select GG)</string>
+    <string name="anti_cheat_exclude_apps_summary">Tap to select GameGuardian or other tools to exclude from anti-cheat hooks</string>
 </resources>

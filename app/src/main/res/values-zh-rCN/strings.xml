@@ -65,6 +65,8 @@
     <string name="no_gms">当前手机没有Google服务环境。</string>
     <string name="gg_compat_mode">GG 修改器内存读写模式</string>
     <string name="gg_compat_mode_summary">允许免 Root 跨进程扫描与修改虚拟空间内游戏内存（不用 GG 时可关闭以隐藏调试状态）</string>
-    <string name="anti_cheat_bypass">反作弊深度绕过 (原生 I/O 重定向)</string>
-    <string name="anti_cheat_bypass_summary">开启 C++ 原生层 libc.so 文件系统重定向与反作弊路径缓冲区原地替换（完美兼容 GG 修改器）</string>
+    <string name="anti_cheat_bypass">反作弊深度绕过 (Seccomp/I/O/Maps)</string>
+    <string name="anti_cheat_bypass_summary">开启原生层路径重定向、非 libc 内联 svc #0 拦截与 /proc/self/maps 沙盒隐藏</string>
+    <string name="anti_cheat_exclude_apps">反作弊绕过排除应用 (勾选 GG 修改器)</string>
+    <string name="anti_cheat_exclude_apps_summary">点击手动勾选 GG 修改器等无需反作弊拦截的应用，防止干扰 GG 守护进程</string>
 </resources>

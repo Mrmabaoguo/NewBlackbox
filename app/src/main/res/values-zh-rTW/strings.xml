@@ -66,4 +66,6 @@
     <string name="gg_compat_mode_summary">允許免 Root 跨進程掃描與修改虛擬空間內遊戲記憶體（不用 GG 時可關閉以隱藏調試狀態）</string>
     <string name="anti_cheat_bypass">反作弊深度繞過 (Seccomp/I/O/Maps)</string>
     <string name="anti_cheat_bypass_summary">開啟原生層路徑重定向、核心級 svc #0 系統調用攔截與 /proc/self/maps 沙盒隱藏</string>
+    <string name="anti_cheat_exclude_apps">反作弊繞過排除應用 (勾選 GG 修改器)</string>
+    <string name="anti_cheat_exclude_apps_summary">點擊手動勾選 GG 修改器等無需反作弊攔截的應用，防止干擾 GG 守護進程</string>
 </resources>
