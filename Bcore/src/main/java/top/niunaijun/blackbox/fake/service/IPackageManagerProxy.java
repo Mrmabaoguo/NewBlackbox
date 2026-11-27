@@ -373,12 +373,40 @@ public class IPackageManagerProxy extends BinderInvocationStub {
         }
     }
 
+    @ProxyMethod("queryIntentActivities")
+    public static class QueryIntentActivities extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            Intent intent = MethodParameterUtils.getFirstParam(args, Intent.class);
+            String resolvedType = MethodParameterUtils.getFirstParam(args, String.class);
+            int flags = 0;
+            for (Object arg : args) {
+                if (arg instanceof Integer || arg instanceof Long) {
+                    flags = MethodParameterUtils.toInt(arg);
+                    break;
+                }
+            }
+            List<ResolveInfo> resolves = BlackBoxCore.getBPackageManager().queryIntentActivities(intent, flags, resolvedType, BActivityThread.getUserId());
+            if (resolves != null && !resolves.isEmpty()) {
+                if (BuildCompat.isN()) {
+                    return ParceledListSliceCompat.create(resolves);
+                }
+                return resolves;
+            }
+            return method.invoke(who, args);
+        }
+    }
+
     @ProxyMethod("getSharedLibraries")
     public static class GetSharedLibraries extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            
-            return ParceledListSliceCompat.create(new ArrayList<>());
+            MethodParameterUtils.replaceFirstAppPkg(args);
+            try {
+                return method.invoke(who, args);
+            } catch (Throwable ignored) {
+                return ParceledListSliceCompat.create(new ArrayList<>());
+            }
         }
     }
 

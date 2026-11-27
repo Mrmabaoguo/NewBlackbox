@@ -46,20 +46,6 @@ public class ResourcesManagerProxy extends ClassInvocationStub {
     public static class LoadApkAssets extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            String path = (String) args[0];
-            
-            
-            if (path != null && (path.contains("resource-cache") || 
-                                path.contains("@idmap") || 
-                                path.contains(".frro") ||
-                                path.contains("systemui") ||
-                                path.contains("data@resource-cache@"))) {
-                Log.d(TAG, "Blocking problematic ApkAssets load: " + path);
-                
-                return null;
-            }
-            
-            
             return method.invoke(who, args);
         }
     }
@@ -68,20 +54,6 @@ public class ResourcesManagerProxy extends ClassInvocationStub {
     public static class LoadOverlayFromPath extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            String path = (String) args[0];
-            
-            
-            if (path != null && (path.contains("resource-cache") || 
-                                path.contains("@idmap") || 
-                                path.contains(".frro") ||
-                                path.contains("systemui") ||
-                                path.contains("data@resource-cache@"))) {
-                Log.d(TAG, "Blocking problematic overlay path: " + path);
-                
-                return null;
-            }
-            
-            
             return method.invoke(who, args);
         }
     }

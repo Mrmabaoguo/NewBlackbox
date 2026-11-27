@@ -22,7 +22,13 @@ public class AppSystemEnv {
         sSystemPackages.add("com.google.android.webview.dev");
         sSystemPackages.add("com.google.android.webview.beta");
         sSystemPackages.add("com.google.android.webview.canary");
+        sSystemPackages.add("com.google.android.trichromelibrary");
         sSystemPackages.add("com.android.webview");
+        sSystemPackages.add("com.android.chrome");
+        sSystemPackages.add("com.google.android.apps.chrome");
+        sSystemPackages.add("com.heytap.browser");
+        sSystemPackages.add("com.coloros.browser");
+        sSystemPackages.add("com.oplus.webview");
         sSystemPackages.add("com.android.camera");
         sSystemPackages.add("com.android.talkback");
         sSystemPackages.add("com.miui.gallery");

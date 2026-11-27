@@ -79,11 +79,7 @@ static bool is_problematic_path(const char *pathname) {
             }
         }
     }
-    return strstr(pathname, "resource-cache") != nullptr ||
-           strstr(pathname, "@idmap") != nullptr ||
-           strstr(pathname, ".frro") != nullptr ||
-           strstr(pathname, "systemui") != nullptr ||
-           strstr(pathname, "data@resource-cache@") != nullptr;
+    return false;
 }
 
 static bool is_system_root_prefix(const char *path) {

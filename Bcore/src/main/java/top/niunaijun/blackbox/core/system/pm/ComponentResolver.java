@@ -472,6 +472,9 @@ public class ComponentResolver {
         @Override
         protected ResolveInfo newResult(BPackage.ActivityIntentInfo info, int match, int userId) {
             final BPackage.Activity activity = info.activity;
+            if (!activity.info.enabled && (mFlags & PackageManager.MATCH_DISABLED_COMPONENTS) == 0) {
+                return null;
+            }
             BPackageSettings ps = (BPackageSettings) activity.owner.mExtras;
             if (ps == null) {
                 return null;

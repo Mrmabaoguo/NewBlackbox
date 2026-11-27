@@ -193,17 +193,7 @@ public class BPackageManagerService extends IBPackageManagerService.Stub impleme
             if (N == 1) {
                 return query.get(0);
             } else if (N > 1) {
-                
-                
-                ResolveInfo r0 = query.get(0);
-                ResolveInfo r1 = query.get(1);
-                
-                
-                if (r0.priority != r1.priority
-                        || r0.preferredOrder != r1.preferredOrder
-                        || r0.isDefault != r1.isDefault) {
-                    return query.get(0);
-                }
+                return query.get(0);
             }
         }
         return null;
@@ -448,17 +438,18 @@ public class BPackageManagerService extends IBPackageManagerService.Stub impleme
                     result = mComponentResolver.queryActivities(
                             intent, resolvedType, flags, pkg.activities, userId);
                 }
-                if (result == null || result.size() == 0) {
-                    
-                    
-                    if (result == null) {
-                        result = new ArrayList<>();
-                    }
+                if (result == null) {
+                    result = new ArrayList<>();
+                }
+                return result;
+            } else {
+                result = mComponentResolver.queryActivities(intent, resolvedType, flags, userId);
+                if (result == null) {
+                    result = new ArrayList<>();
                 }
                 return result;
             }
         }
-        return Collections.emptyList();
     }
 
     @Override

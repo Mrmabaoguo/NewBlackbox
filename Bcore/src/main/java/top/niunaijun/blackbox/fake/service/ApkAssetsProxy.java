@@ -46,19 +46,6 @@ public class ApkAssetsProxy extends ClassInvocationStub {
     public static class LoadOverlayFromPath extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            String path = (String) args[0];
-            
-            
-            if (path != null && (path.contains("resource-cache") || 
-                                path.contains("@idmap") || 
-                                path.contains(".frro") ||
-                                path.contains("systemui") ||
-                                path.contains("data@resource-cache@"))) {
-                Log.d(TAG, "Blocking problematic overlay path: " + path);
-                throw new RuntimeException("Blocked problematic overlay path: " + path);
-            }
-            
-            
             return method.invoke(who, args);
         }
     }
@@ -67,19 +54,6 @@ public class ApkAssetsProxy extends ClassInvocationStub {
     public static class NativeLoad extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            String path = (String) args[0];
-            
-            
-            if (path != null && (path.contains("resource-cache") || 
-                                path.contains("@idmap") || 
-                                path.contains(".frro") ||
-                                path.contains("systemui") ||
-                                path.contains("data@resource-cache@"))) {
-                Log.d(TAG, "Blocking problematic native load path: " + path);
-                throw new RuntimeException("Blocked problematic native load path: " + path);
-            }
-            
-            
             return method.invoke(who, args);
         }
     }

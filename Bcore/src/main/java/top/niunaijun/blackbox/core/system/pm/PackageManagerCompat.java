@@ -306,6 +306,23 @@ public class PackageManagerCompat {
         ai.sourceDir = sourceDir;
         ai.uid = p.mExtras.appId;
 
+        if (p.installOption != null && p.installOption.isFlag(InstallOption.FLAG_SYSTEM)) {
+            try {
+                ApplicationInfo hostTargetInfo = BlackBoxCore.getPackageManager().getApplicationInfo(p.packageName, 0);
+                if (hostTargetInfo != null) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        ai.splitSourceDirs = hostTargetInfo.splitSourceDirs;
+                        ai.splitPublicSourceDirs = hostTargetInfo.splitPublicSourceDirs;
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            ai.splitNames = hostTargetInfo.splitNames;
+                        }
+                    }
+                    ai.sharedLibraryFiles = hostTargetInfo.sharedLibraryFiles;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+
 
         if (BuildCompat.isL()) {
             BRApplicationInfoL.get(ai)._set_primaryCpuAbi(Build.CPU_ABI);
@@ -347,6 +364,11 @@ public class PackageManagerCompat {
         String APACHE_LEGACY_JAR = "/system/framework/org.apache.http.legacy.boot.jar";
         String APACHE_LEGACY_JAR_Q = "/system/framework/org.apache.http.legacy.jar";
         Set<String> sharedLibraryFileList = new HashSet<>();
+        if (info.sharedLibraryFiles != null) {
+            for (String s : info.sharedLibraryFiles) {
+                if (s != null) sharedLibraryFileList.add(s);
+            }
+        }
         if (BuildCompat.isQ()) {
             if (!FileUtils.isExist(APACHE_LEGACY_JAR_Q)) {
                 sharedLibraryFileList.add(APACHE_LEGACY_JAR);
@@ -356,11 +378,6 @@ public class PackageManagerCompat {
         } else {
             sharedLibraryFileList.add(APACHE_LEGACY_JAR);
         }
-
-
-
-
-
         info.sharedLibraryFiles = sharedLibraryFileList.toArray(new String[]{});
     }
 

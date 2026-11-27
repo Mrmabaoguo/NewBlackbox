@@ -83,25 +83,39 @@ public class BPackageManager extends BlackManager<IBPackageManagerService> {
     }
 
     public Intent getLaunchIntentForPackage(String packageName, int userId) {
-        
         if (shouldUseFallbackMode()) {
             Log.w(TAG, "Using fallback launch intent for " + packageName + " due to service failures");
             return createFallbackLaunchIntent(packageName);
         }
-        
+
+        // Prefer the host system's resolved launch component if the app is also installed on host (avoids picking disabled aliases like Chrome's WebView DevTools)
+        try {
+            Intent hostLaunch = BlackBoxCore.getContext().getPackageManager().getLaunchIntentForPackage(packageName);
+            if (hostLaunch != null && hostLaunch.getComponent() != null) {
+                ActivityInfo ai = getActivityInfo(hostLaunch.getComponent(), 0, userId);
+                if (ai != null) {
+                    Intent intent = new Intent(Intent.ACTION_MAIN);
+                    intent.addCategory(Intent.CATEGORY_LAUNCHER);
+                    intent.setPackage(packageName);
+                    intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    intent.setClassName(ai.packageName, ai.name);
+                    return intent;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+
         Intent intentToResolve = new Intent(Intent.ACTION_MAIN);
-        intentToResolve.addCategory(Intent.CATEGORY_INFO);
+        intentToResolve.addCategory(Intent.CATEGORY_LAUNCHER);
         intentToResolve.setPackage(packageName);
         List<ResolveInfo> ris = queryIntentActivities(intentToResolve,
                 0,
                 intentToResolve.resolveTypeIfNeeded(BlackBoxCore.getContext().getContentResolver()),
                 userId);
 
-        
         if (ris == null || ris.size() <= 0) {
-            
-            intentToResolve.removeCategory(Intent.CATEGORY_INFO);
-            intentToResolve.addCategory(Intent.CATEGORY_LAUNCHER);
+            intentToResolve.removeCategory(Intent.CATEGORY_LAUNCHER);
+            intentToResolve.addCategory(Intent.CATEGORY_INFO);
             intentToResolve.setPackage(packageName);
             ris = queryIntentActivities(intentToResolve,
                     0,

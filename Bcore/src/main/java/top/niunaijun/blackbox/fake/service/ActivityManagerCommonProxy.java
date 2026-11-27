@@ -92,6 +92,25 @@ public class ActivityManagerCommonProxy {
                         BActivityThread.getUserId());
                 if (resolveInfo == null) {
                     intent.setPackage(origPackage);
+                    try {
+                        Object res = method.invoke(who, args);
+                        if (res instanceof Integer && ((Integer) res) >= 0) {
+                            return res;
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    if (Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null) {
+                        String scheme = intent.getData().getScheme();
+                        if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) {
+                            try {
+                                Intent browserIntent = new Intent(intent);
+                                browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                BlackBoxCore.getContext().startActivity(browserIntent);
+                                return 0;
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    }
                     return method.invoke(who, args);
                 }
             }

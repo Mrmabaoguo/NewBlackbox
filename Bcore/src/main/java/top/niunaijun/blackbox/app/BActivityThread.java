@@ -390,8 +390,10 @@ public class BActivityThread extends IBActivityThread.Stub {
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             try {
-                String suffix = (getUserId() + "_" + packageName + "_" + processName).replace(":", "_");
-                WebView.setDataDirectorySuffix(suffix);
+                if (processName != null && !processName.equals(packageName)) {
+                    String suffix = (getUserId() + "_" + processName).replace(":", "_");
+                    WebView.setDataDirectorySuffix(suffix);
+                }
             } catch (Throwable ignored) {
             }
         }
