@@ -164,7 +164,14 @@ public class IActivityManagerProxy extends ClassInvocationStub {
                             .resolveContentProvider(
                                     (String) auth, GET_META_DATA, BActivityThread.getUserId());
                     if (providerInfo == null) {
-                        
+                        try {
+                            content = method.invoke(who, args);
+                            if (content != null) {
+                                ContentProviderDelegate.update(content, (String) auth);
+                                return content;
+                            }
+                        } catch (Throwable ignored) {
+                        }
                         return null;
                     }
 
@@ -338,30 +345,37 @@ public class IActivityManagerProxy extends ClassInvocationStub {
         }
     }
 
-    public static Object BindServiceCommon(Object who, Method method, Object[] args,int callingPackageIndex) throws Throwable {
+    public static Object BindServiceCommon(Object who, Method method, Object[] args, int callingPackageIndex) throws Throwable {
         try {
             Intent intent = (Intent) args[2];
             String resolvedType = (String) args[3];
             IServiceConnection connection = (IServiceConnection) args[4];
 
-            
             if (intent == null) {
                 Slog.w(TAG, "BindServiceCommon: Intent is null, proceeding with original call");
                 return method.invoke(who, args);
             }
 
-            
+            // Always replace virtual app callingPackage with host package name (handles Android 13-16 bindServiceInstance args[9] as well)
+            MethodParameterUtils.replaceLastAppPkg(args);
 
             int userId = intent.getIntExtra("_B_|_UserId", -1);
             userId = userId == -1 ? BActivityThread.getUserId() : userId;
             ResolveInfo resolveInfo = BlackBoxCore.getBPackageManager().resolveService(intent, 0, resolvedType, userId);
-            if (resolveInfo != null || AppSystemEnv.isOpenPackage(intent.getComponent())) {
+            if (resolveInfo != null) {
+                // Only clear instanceName (args[6] in bindIsolatedService/bindServiceInstance) when redirecting a virtual app service to ProxyService
+                if ("bindIsolatedService".equals(method.getName()) || "bindServiceInstance".equals(method.getName())) {
+                    if (args.length > 6 && args[6] instanceof String && !BlackBoxCore.getHostPkg().equals(args[6])) {
+                        args[6] = null;
+                    }
+                }
+
                 Intent proxyIntent = BlackBoxCore.getBActivityManager().bindService(intent,
                         connection == null ? null : connection.asBinder(),
                         resolvedType,
                         userId);
                 if (connection != null) {
-                    if (intent.getComponent() == null && resolveInfo != null) {
+                    if (intent.getComponent() == null) {
                         intent.setComponent(new ComponentName(resolveInfo.serviceInfo.packageName, resolveInfo.serviceInfo.name));
                     }
                     IServiceConnection proxy = ServiceConnectionDelegate.createProxy(connection, intent);
@@ -373,17 +387,21 @@ public class IActivityManagerProxy extends ClassInvocationStub {
                     }
                 }
 
-                
-                if (proxyIntent != null && proxyIntent.getComponent() != null && 
-                    proxyIntent.getComponent().getPackageName().equals(BlackBoxCore.getHostPkg())){
+                if (proxyIntent != null && proxyIntent.getComponent() != null &&
+                    proxyIntent.getComponent().getPackageName().equals(BlackBoxCore.getHostPkg())) {
                     int flagsIndex = getFlagsIndex(args);
                     if (flagsIndex >= 0) {
-                        int flags = MethodParameterUtils.toInt(args[flagsIndex]);
-                        flags &= ~Context.BIND_EXTERNAL_SERVICE;
-                        args[flagsIndex] = flags;
+                        if (args[flagsIndex] instanceof Long) {
+                            long flags = (Long) args[flagsIndex];
+                            flags &= ~Context.BIND_EXTERNAL_SERVICE;
+                            args[flagsIndex] = flags;
+                        } else {
+                            int flags = MethodParameterUtils.toInt(args[flagsIndex]);
+                            flags &= ~Context.BIND_EXTERNAL_SERVICE;
+                            args[flagsIndex] = flags;
+                        }
                     }
                 }
-                args[callingPackageIndex] = BlackBoxCore.getHostPkg();
 
                 if (proxyIntent != null) {
                     args[2] = proxyIntent;
@@ -412,7 +430,7 @@ public class IActivityManagerProxy extends ClassInvocationStub {
 
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            return BindServiceCommon(who,method,args,6);
+            return BindServiceCommon(who, method, args, 6);
         }
 
         @Override
@@ -426,7 +444,7 @@ public class IActivityManagerProxy extends ClassInvocationStub {
     public static class bindServiceInstance extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            return BindServiceCommon(who,method,args,7);
+            return BindServiceCommon(who, method, args, -1);
         }
 
         @Override
@@ -440,9 +458,7 @@ public class IActivityManagerProxy extends ClassInvocationStub {
     public static class BindIsolatedService extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            
-            args[6] = null;
-            return BindServiceCommon(who,method,args,7);
+            return BindServiceCommon(who, method, args, -1);
         }
 
         @Override

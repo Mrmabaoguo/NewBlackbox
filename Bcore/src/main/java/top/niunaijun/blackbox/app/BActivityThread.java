@@ -389,7 +389,11 @@ public class BActivityThread extends IBActivityThread.Stub {
             }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            WebView.setDataDirectorySuffix(getUserId() + ":" + packageName + ":" + processName);
+            try {
+                String suffix = (getUserId() + "_" + packageName + "_" + processName).replace(":", "_");
+                WebView.setDataDirectorySuffix(suffix);
+            } catch (Throwable ignored) {
+            }
         }
 
         VirtualRuntime.setupRuntime(processName, applicationInfo);
