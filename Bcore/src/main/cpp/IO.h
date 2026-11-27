@@ -29,6 +29,8 @@ public:
     static jobject redirectPath(JNIEnv *env, jobject path);
 
     static const char *redirectPath(const char *__path);
+
+    static const char *redirectPathBuf(const char *__path, char *buf, size_t buf_size);
 };
 
 
